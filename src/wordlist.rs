@@ -6,9 +6,12 @@
 //!   comprises ;
 //! - [Lexique] 3.83 (CC BY-SA 4.0) : fréquences d'usage (films et livres).
 //!
-//! Elles sont fusionnées en un fichier `mot<TAB>score`, où le score croît
-//! avec le logarithme de la fréquence (0 pour un mot absent de Lexique, 21
-//! pour un mot vu une fois par million, 41 pour cent fois par million). Le
+//! Elles sont fusionnées en un fichier `mot<TAB>score` : la liste de formes
+//! fixe les mots admis, Lexique ne fait que les noter (ses mots absents de la
+//! liste sont surtout des scories de sous-titres : « dano », « ok », « to »).
+//! Le score croît avec le logarithme de la fréquence (0 pour un mot absent
+//! de Lexique, 21 pour un mot vu une fois par million, 41 pour cent fois par
+//! million). Le
 //! téléchargement passe par la commande `curl`, présente sur Linux, macOS et
 //! Windows 10 et plus.
 //!
@@ -39,7 +42,7 @@ const LEXIQUE: Source = Source {
 
 /// Nom du fichier fusionné ; à changer si le format ou le calcul des scores
 /// évolue, pour forcer la régénération.
-const MERGED: &str = "fr-v1.txt";
+const MERGED: &str = "fr-v2.txt";
 
 /// Dossier de cache : `$MOTSCROISES_CACHE`, sinon `$XDG_CACHE_HOME/motscroises`,
 /// sinon `~/.cache/motscroises` (`%LOCALAPPDATA%\motscroises` sous Windows).
@@ -146,8 +149,9 @@ fn merge(words_json: &str, lexique_tsv: &str) -> io::Result<String> {
             continue;
         };
         let num = |i: usize| f.get(i).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
-        let e = freq.entry(w.to_string()).or_insert(-1.0);
-        *e = e.max(0.0) + (num(films) + num(books)) / 2.0;
+        if let Some(e) = freq.get_mut(*w) {
+            *e = e.max(0.0) + (num(films) + num(books)) / 2.0;
+        }
     }
     let mut out = String::from(
         "# Généré par motscroises : an-array-of-french-words 2.0.0 (MIT), \
@@ -290,6 +294,7 @@ mod tests {
         let tsv = "ortho\tfreqfilms2\tfreqlivres\nchat\t30\t50\nchat\t2\t0\nzut\t0\t0\n";
         let out = merge(json, tsv).unwrap();
         let lines: Vec<&str> = out.lines().skip(1).collect();
-        assert_eq!(lines, vec!["abaissasse\t0", "chat\t37", "zut\t1"]);
+        // « zut », absent de la liste de formes, n'est pas admis.
+        assert_eq!(lines, vec!["abaissasse\t0", "chat\t37"]);
     }
 }

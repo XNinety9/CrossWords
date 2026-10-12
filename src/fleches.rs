@@ -117,36 +117,75 @@ pub fn assign_clues(grid: &Grid, strict: bool) -> Result<Vec<Clue>, String> {
     Ok(clues)
 }
 
-/// Définitions à afficher : `MOT<TAB>définition`, une par ligne. Plusieurs
-/// lignes pour un même mot donnent plusieurs définitions possibles.
+/// Niveaux de difficulté des mots fléchés, du plus facile au plus difficile.
+pub const LEVELS: std::ops::RangeInclusive<u8> = 1..=4;
+
+/// Définitions à afficher : `MOT<TAB>définition`, une par ligne, suivie
+/// éventuellement d'une tabulation et d'un niveau de difficulté (1 à 4).
+/// Sans niveau, la définition vaut pour tous les niveaux. Plusieurs lignes
+/// pour un même mot donnent plusieurs définitions possibles.
 #[derive(Debug, Default, Clone)]
 pub struct Definitions {
-    map: HashMap<Vec<Letter>, Vec<String>>,
+    /// Définitions par mot, avec leur niveau (0 : tous niveaux).
+    map: HashMap<Vec<Letter>, Vec<(String, u8)>>,
 }
 
 impl Definitions {
     pub fn from_reader<R: BufRead>(reader: R) -> io::Result<Self> {
-        let mut map: HashMap<Vec<Letter>, Vec<String>> = HashMap::new();
+        let mut d = Definitions::default();
         for line in reader.lines() {
             let line = line?;
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
-            let Some((word, def)) = line.split_once(['\t', ';']) else {
+            let Some((word, rest)) = line.split_once(['\t', ';']) else {
                 continue;
             };
-            if let Some(n) = normalize(word.trim()) {
-                map.entry(n).or_default().push(def.trim().to_string());
-            }
+            let (def, level) = match rest.rsplit_once('\t') {
+                Some((def, l)) => match l.trim().parse::<u8>() {
+                    Ok(n) if LEVELS.contains(&n) => (def, n),
+                    _ => (rest, 0),
+                },
+                None => (rest, 0),
+            };
+            d.insert_level(word.trim(), def.trim(), level);
         }
-        Ok(Definitions { map })
+        Ok(d)
     }
 
+    /// Ajoute une définition valable pour tous les niveaux.
     pub fn insert(&mut self, word: &str, definition: &str) {
+        self.insert_level(word, definition, 0);
+    }
+
+    /// Ajoute une définition d'un niveau donné (0 : tous niveaux).
+    pub fn insert_level(&mut self, word: &str, definition: &str, level: u8) {
         if let Some(n) = normalize(word) {
-            self.map.entry(n).or_default().push(definition.to_string());
+            self.map
+                .entry(n)
+                .or_default()
+                .push((definition.to_string(), level));
         }
+    }
+
+    /// Définitions retenues pour un niveau : pour chaque mot, celles de ce
+    /// niveau, sinon celles valables pour tous les niveaux.
+    pub fn at_level(&self, level: u8) -> Definitions {
+        let map = self
+            .map
+            .iter()
+            .filter_map(|(k, v)| {
+                let exact: Vec<_> = v.iter().filter(|(_, l)| *l == level).cloned().collect();
+                let kept = if exact.is_empty() {
+                    v.iter().filter(|(_, l)| *l == 0).cloned().collect()
+                } else {
+                    exact
+                };
+                (!kept.is_empty()).then(|| (k.clone(), kept))
+            })
+            .collect();
+        Definitions { map }
     }
 
     /// Une définition du mot, choisie de façon déterministe s'il y en a plusieurs.
@@ -156,7 +195,7 @@ impl Definitions {
         let h = n
             .iter()
             .fold(0usize, |h, &l| h.wrapping_mul(31).wrapping_add(l as usize));
-        v.get(h % v.len()).map(String::as_str)
+        v.get(h % v.len()).map(|(d, _)| d.as_str())
     }
 
     /// Ajoute les mots de `other` absents d'ici : les définitions déjà
@@ -174,7 +213,7 @@ impl Definitions {
             .iter()
             .filter_map(|(k, defs)| {
                 let w = k.iter().map(|&l| letter_char(l)).collect();
-                defs.first().map(|d| (w, d.as_str()))
+                defs.first().map(|(d, _)| (w, d.as_str()))
             })
             .collect();
         v.sort();
@@ -603,9 +642,47 @@ pub struct FlechesOptions {
     pub attempts: u32,
     /// Nœuds alloués au remplissage de chaque gabarit.
     pub node_budget: u64,
+    /// Voir [`crate::FillOptions::score_weight`].
+    pub score_weight: f32,
+}
+
+/// Réglages d'un niveau de difficulté.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LevelSettings {
+    /// Seuil de fréquence conseillé avec la liste par défaut
+    /// ([`crate::wordlist::french`]).
+    pub min_score: u32,
+    /// Préférence pour les mots courants (voir [`crate::FillOptions::score_weight`]).
+    pub score_weight: f32,
+    /// Facteur appliqué au taux de cases définitions intérieures : moins de
+    /// cases, des mots plus longs.
+    pub density: f64,
+}
+
+/// Réglages du niveau `level` (1 : facile, 4 : très difficile).
+pub fn level_settings(level: u8) -> LevelSettings {
+    let (min_score, score_weight, density) = match level.clamp(1, 4) {
+        1 => (22, 1.5, 1.10),
+        2 => (17, 0.5, 1.0),
+        3 => (12, 0.0, 0.92),
+        _ => (8, -0.5, 0.85),
+    };
+    LevelSettings {
+        min_score,
+        score_weight,
+        density,
+    }
 }
 
 impl FlechesOptions {
+    /// Applique la préférence de vocabulaire et la densité d'un niveau.
+    pub fn with_level(mut self, level: u8) -> Self {
+        let l = level_settings(level);
+        self.score_weight = l.score_weight;
+        self.inner_ratio *= l.density;
+        self
+    }
+
     pub fn new(width: usize, height: usize) -> Self {
         FlechesOptions {
             width,
@@ -615,6 +692,7 @@ impl FlechesOptions {
             seed: 0,
             attempts: 1_000,
             node_budget: 200,
+            score_weight: 1.0,
         }
     }
 }
@@ -735,6 +813,7 @@ pub fn generate_fleches(
         else {
             continue;
         };
+        let solver = solver.with_score_weight(opts.score_weight);
         let (outcome, sol, nodes) = solver.run();
         total += nodes;
         if outcome == Outcome::Solved {
@@ -875,6 +954,33 @@ mod tests {
         assert!(!fl.to_svg(false, Some(&defs)).contains(">Définitions<"));
         let list = fl.numbered_clue_list(Some(&defs));
         assert_eq!(list.lines().count(), nums.len());
+    }
+
+    #[test]
+    fn definitions_by_level() {
+        let txt = "ETE\tSaison chaude\t1\nETE\tParticipe au passé\t4\nOR\tMétal\nSEL\tCondiment\t1\nMER\tVague ; écume\t9\n";
+        let d = Definitions::from_reader(txt.as_bytes()).unwrap();
+        assert_eq!(d.at_level(1).get("ETE"), Some("Saison chaude"));
+        assert_eq!(d.at_level(4).get("ETE"), Some("Participe au passé"));
+        // Sans niveau : valable partout.
+        assert_eq!(d.at_level(3).get("OR"), Some("Métal"));
+        // Niveau 1 seulement : absent au niveau 3.
+        assert!(d.at_level(3).get("SEL").is_none());
+        // Dernier champ hors de 1..=4 : il fait partie de la définition.
+        assert_eq!(d.at_level(2).get("MER"), Some("Vague ; écume\t9"));
+    }
+
+    #[test]
+    fn levels_get_harder() {
+        let l: Vec<LevelSettings> = LEVELS.map(level_settings).collect();
+        for w in l.windows(2) {
+            assert!(w[1].min_score < w[0].min_score);
+            assert!(w[1].score_weight < w[0].score_weight);
+            assert!(w[1].density < w[0].density);
+        }
+        let easy = FlechesOptions::new(11, 13).with_level(1);
+        let hard = FlechesOptions::new(11, 13).with_level(4);
+        assert!(hard.inner_ratio < easy.inner_ratio);
     }
 
     #[test]

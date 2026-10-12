@@ -1,4 +1,6 @@
-//! Rédaction automatique des définitions de mots fléchés par Claude Haiku 5.5.
+//! Rédaction automatique des définitions de mots fléchés : Claude Haiku 5.5
+//! pour les niveaux 1 et 2, Claude Opus 5.5 pour les niveaux 3 et 4 (jeux de
+//! mots et références, que Haiku réussit mal).
 //!
 //! Les mots sans définition sont envoyés en lot à l'API Messages (clé lue
 //! dans `ANTHROPIC_API_KEY`, passée à `curl` par l'entrée standard pour ne
@@ -15,7 +17,10 @@ use std::fmt::Write as _;
 use std::io::{self, Write as _};
 use std::process::{Command, Stdio};
 
-pub const MODEL: &str = "claude-haiku-5-5";
+/// Modèle des niveaux 1 et 2 : définitions directes, coût minimal.
+pub const EASY_MODEL: &str = "claude-haiku-5-5";
+/// Modèle des niveaux 3 et 4 : périphrases, références, doubles sens.
+pub const HARD_MODEL: &str = "claude-opus-5-5";
 
 /// Longueur maximale d'une définition, en caractères.
 pub const MAX_CHARS: usize = 30;
@@ -32,8 +37,8 @@ const SYSTEM: &str = "Tu rédiges des définitions de mots fléchés en françai
 
 Chaque mot t'est donné en majuscules, sans accents. Pour chacun, commence par l'identifier dans le champ « analyse » : sa graphie exacte avec accents, sa nature et sa forme (personne, temps, genre, nombre). Plusieurs mots peuvent s'écrire pareil sans accents : AGI est « agi », participe passé de agir ; AIT est « ait », subjonctif présent de avoir ; REGENT est « régent », mais aussi « régent », 3e personne du pluriel de régir ; ALE est « ale », bière anglaise ; AIE est « aïe », cri de douleur. Choisis la lecture la plus naturelle dans une grille.
 
-Puis écris la définition, dans le style des mots fléchés :
-- courte : 1 à 4 mots, 30 caractères au plus, aucun mot de plus de 11 lettres (elle doit tenir dans une petite case) ;
+Puis écris la définition, dans le style des mots fléchés et au niveau de difficulté indiqué plus bas :
+- courte : 1 à 5 mots, 30 caractères au plus, aucun mot de plus de 11 lettres (elle doit tenir dans une petite case) ;
 - exactement de la même forme que le mot analysé : un verbe conjugué se définit par un verbe à la même personne et au même temps (SERS : « Rends service », REGENT : « Gouvernent »), un participe par un participe, un pluriel par un pluriel, un féminin par un féminin ;
 - sans le mot lui-même, ni un mot de la même famille, ni une variante orthographique (CLES : « Clefs » est interdit) ;
 - en français naturel, pas en style télégraphique (PAIN : « Sort du fournil », pas « Boulangerie produit ») ;
@@ -52,13 +57,33 @@ pub struct Report {
     pub rejected: Vec<String>,
     pub input_tokens: u64,
     pub output_tokens: u64,
+    /// Modèle employé.
+    pub model: String,
 }
 
-/// Rédige une définition pour chaque mot de `words`, dans le style de
-/// celles déjà présentes dans `examples`.
+/// Rédige une définition de niveau `level` (1 à 4) pour chaque mot de
+/// `words`, dans le style de celles de ce niveau déjà présentes dans
+/// `examples`.
 pub fn generate(
     words: &[String],
     examples: &Definitions,
+    level: u8,
+    log: impl FnMut(&str),
+) -> io::Result<Report> {
+    generate_with(model_for_level(level), words, examples, level, log)
+}
+
+/// Modèle employé pour un niveau.
+pub fn model_for_level(level: u8) -> &'static str {
+    if level >= 3 { HARD_MODEL } else { EASY_MODEL }
+}
+
+/// Comme [`generate`], avec un modèle choisi.
+pub fn generate_with(
+    model: &str,
+    words: &[String],
+    examples: &Definitions,
+    level: u8,
     mut log: impl FnMut(&str),
 ) -> io::Result<Report> {
     let key = std::env::var("ANTHROPIC_API_KEY")
@@ -70,8 +95,11 @@ pub fn generate(
                 "ANTHROPIC_API_KEY n'est pas définie",
             )
         })?;
-    let system = system_prompt(examples);
-    let mut report = Report::default();
+    let system = system_prompt(&examples.at_level(level), level);
+    let mut report = Report {
+        model: model.to_string(),
+        ..Report::default()
+    };
     let mut todo: Vec<String> = words.to_vec();
     let mut feedback: Vec<String> = Vec::new();
     for round in 0..2 {
@@ -85,10 +113,11 @@ pub fn generate(
         let mut refusals = Vec::new();
         for chunk in todo.chunks(BATCH) {
             log(&format!(
-                "Rédaction de {} définition(s) par {MODEL}",
+                "Rédaction de {} définition(s) par {model}",
                 chunk.len()
             ));
-            let (got, tin, tout) = call(&key, &system, chunk, &feedback)?;
+            let effort = if level >= 3 { "medium" } else { "low" };
+            let (got, tin, tout) = call(&key, model, effort, &system, chunk, &feedback)?;
             report.input_tokens += tin;
             report.output_tokens += tout;
             for w in chunk {
@@ -140,13 +169,33 @@ pub fn check(word: &str, def: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn system_prompt(examples: &Definitions) -> String {
+/// Style attendu à chaque niveau, avec des exemples.
+fn level_style(level: u8) -> &'static str {
+    match level.clamp(1, 4) {
+        1 => {
+            "Niveau 1 sur 4, facile : synonyme direct ou définition évidente, la réponse doit venir tout de suite. Exemples : ETE : « Saison chaude » ; SERS : « Rends service » ; CIME : « Sommet »."
+        }
+        2 => {
+            "Niveau 2 sur 4, moyen : définition exacte mais moins immédiate, par un synonyme moins courant, une précision, un sens second ou une petite allusion. Exemples : ETE : « Saison des moissons » ; ANSE : « Petite baie » ; CIME : « Point culminant » ; ERRA : « Alla sans but »."
+        }
+        3 => {
+            "Niveau 3 sur 4, difficile : périphrase indirecte, sens figuré ou secondaire, référence culturelle. La réponse demande de la réflexion, mais la définition reste exacte. Exemples : ETE : « Finit en septembre » ; TSAR : « Ivan le fut » ; ERRA : « Fit comme Ulysse » ; OR : « Vaut le silence »."
+        }
+        _ => {
+            "Niveau 4 sur 4, très difficile : double sens, jeu de mots, fausse piste. La définition semble désigner autre chose et ne s'éclaire qu'une fois la réponse trouvée ; un point d'interrogation final peut signaler le jeu de mots. Elle doit rester juste pour le mot. Exemples : LIERRE : « Fait le mur » ; OR : « Mais précieux » ; ETE : « Participe au passé » ; PNEU : « Gonflé, il roule »."
+        }
+    }
+}
+
+fn system_prompt(examples: &Definitions, level: u8) -> String {
     let entries = examples.entries();
     let mut s = String::from(SYSTEM);
+    s.push_str("\n\n");
+    s.push_str(level_style(level));
     if entries.is_empty() {
         return s;
     }
-    s.push_str("\n\nExemples du ton attendu :\n");
+    s.push_str("\n\nAutres définitions de ce niveau, pour le ton :\n");
     let step = entries.len().div_ceil(EXAMPLES).max(1);
     for (w, d) in entries.iter().step_by(step) {
         let _ = writeln!(s, "{w} : {d}");
@@ -159,6 +208,8 @@ const SCHEMA: &str = r#"{"type":"object","properties":{"definitions":{"type":"ar
 /// Un appel à l'API ; renvoie les couples reçus et les jetons consommés.
 fn call(
     key: &str,
+    model: &str,
+    effort: &str,
     system: &str,
     words: &[String],
     feedback: &[String],
@@ -170,9 +221,18 @@ fn call(
         );
         user.push_str(&feedback.join("\n"));
     }
+    // Repli côté serveur en cas de refus des filtres de sécurité, conseillé
+    // pour Opus 5.5 ; Haiku 5.5 n'en a pas.
+    let fallback = model.starts_with("claude-opus");
     let body = format!(
-        r#"{{"model":{},"max_tokens":16000,"output_config":{{"effort":"low","format":{{"type":"json_schema","schema":{SCHEMA}}}}},"system":{},"messages":[{{"role":"user","content":{}}}]}}"#,
-        json::quote(MODEL),
+        r#"{{"model":{},"max_tokens":16000,{}"output_config":{{"effort":{},"format":{{"type":"json_schema","schema":{SCHEMA}}}}},"system":{},"messages":[{{"role":"user","content":{}}}]}}"#,
+        json::quote(model),
+        if fallback {
+            r#""fallbacks":"default","#
+        } else {
+            ""
+        },
+        json::quote(effort),
         json::quote(system),
         json::quote(&user),
     );
@@ -182,12 +242,15 @@ fn call(
         .unwrap_or_else(|| "https://api.anthropic.com".into());
     // Configuration curl passée par l'entrée standard : la clé n'apparaît
     // pas dans les arguments du processus.
-    let config = format!(
+    let mut config = format!(
         "url = {}\nsilent\nshow-error\nmax-time = 300\nheader = \"content-type: application/json\"\nheader = \"anthropic-version: 2023-06-01\"\nheader = {}\ndata-binary = {}\n",
         curl_quote(&format!("{}/v1/messages", base.trim_end_matches('/'))),
         curl_quote(&format!("x-api-key: {key}")),
         curl_quote(&body),
     );
+    if fallback {
+        config.push_str("header = \"anthropic-beta: server-side-fallback-2026-07-01\"\n");
+    }
     let mut child = Command::new("curl")
         .args(["--config", "-"])
         .stdin(Stdio::piped())

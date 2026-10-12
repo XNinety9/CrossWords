@@ -31,8 +31,6 @@ const ALL_LETTERS: u32 = (1 << 26) - 1;
 /// coûterait plus qu'il ne rapporte.
 const LETTER_CAP: u32 = 2048;
 
-/// Poids du score du mot (log) dans l'ordre des candidats.
-const SCORE_WEIGHT: f32 = 1.0;
 /// Amplitude du bruit aléatoire dans l'ordre des candidats.
 const NOISE: f32 = 2.0;
 
@@ -70,6 +68,7 @@ pub(crate) struct Solver<'d> {
     rng: Rng,
     nodes: u64,
     budget: u64,
+    score_weight: f32,
 }
 
 fn letters(mask: u32) -> impl Iterator<Item = Letter> {
@@ -151,6 +150,7 @@ impl<'d> Solver<'d> {
             rng,
             nodes: 0,
             budget,
+            score_weight: 1.0,
         };
         for si in 0..n {
             for p in 0..solver.slots[si].len() {
@@ -167,6 +167,13 @@ impl<'d> Solver<'d> {
         solver.trail.clear();
         solver.arena.clear();
         Some(solver)
+    }
+
+    /// Poids du score des mots (en log) dans l'ordre des candidats : positif,
+    /// les mots fréquents passent d'abord ; négatif, les plus rares.
+    pub(crate) fn with_score_weight(mut self, w: f32) -> Self {
+        self.score_weight = w;
+        self
     }
 
     fn enqueue(&mut self, s: usize) {
@@ -434,7 +441,7 @@ impl<'d> Solver<'d> {
             })
             .collect();
         for (k, w) in &mut keyed {
-            *k += SCORE_WEIGHT * (b.scores[*w as usize] as f32 + 1.0).ln()
+            *k += self.score_weight * (b.scores[*w as usize] as f32 + 1.0).ln()
                 + NOISE * self.rng.unit() as f32;
         }
         keyed.sort_by(|x, y| y.0.total_cmp(&x.0));

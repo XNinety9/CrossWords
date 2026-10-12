@@ -46,8 +46,9 @@ pub mod wordlist;
 
 pub use dict::{Dictionary, Letter, letter_char, normalize};
 pub use fleches::{
-    Arrow, Clue, Definitions, Fleches, FlechesOptions, assign_clues, default_inner_ratio,
-    fill_fleches, generate_fleches, is_valid_fleches_pattern, random_fleches_pattern,
+    Arrow, Clue, Definitions, Fleches, FlechesOptions, LEVELS, LevelSettings, assign_clues,
+    default_inner_ratio, fill_fleches, generate_fleches, is_valid_fleches_pattern, level_settings,
+    random_fleches_pattern,
 };
 pub use grid::{Cell, Entry, Grid, ParseError, Slot, Solution, roman};
 pub use pattern::{PatternOptions, default_ratio, random_pattern};
@@ -103,6 +104,9 @@ pub struct FillOptions {
     pub node_budget: u64,
     /// Nombre de tentatives (redémarrages aléatoires).
     pub attempts: u32,
+    /// Préférence pour les mots de bon score : positif, les mots courants
+    /// d'abord ; nul, indifférent ; négatif, les plus rares d'abord.
+    pub score_weight: f32,
 }
 
 impl Default for FillOptions {
@@ -111,6 +115,7 @@ impl Default for FillOptions {
             seed: 0,
             node_budget: 300,
             attempts: 15,
+            score_weight: 1.0,
         }
     }
 }
@@ -126,8 +131,9 @@ pub fn fill(dict: &Dictionary, grid: &Grid, opts: &FillOptions) -> Result<Soluti
     let mut total = 0;
     for _ in 0..opts.attempts.max(1) {
         let attempt_rng = Rng::new(rng.next_u64());
-        let solver =
-            Solver::new(dict, grid, attempt_rng, budget as u64).ok_or(Error::NoSolution)?;
+        let solver = Solver::new(dict, grid, attempt_rng, budget as u64)
+            .ok_or(Error::NoSolution)?
+            .with_score_weight(opts.score_weight);
         let (outcome, sol, nodes) = solver.run();
         total += nodes;
         match outcome {
@@ -151,6 +157,8 @@ pub struct GenerateOptions {
     pub attempts: u32,
     /// Nœuds alloués au remplissage de chaque gabarit.
     pub node_budget: u64,
+    /// Voir [`FillOptions::score_weight`].
+    pub score_weight: f32,
 }
 
 impl GenerateOptions {
@@ -160,6 +168,7 @@ impl GenerateOptions {
             seed: 0,
             attempts: 1_000,
             node_budget: 200,
+            score_weight: 1.0,
         }
     }
 }
@@ -204,6 +213,7 @@ pub fn generate(dict: &Dictionary, opts: &GenerateOptions) -> Result<(Solution, 
         else {
             continue;
         };
+        let solver = solver.with_score_weight(opts.score_weight);
         let (outcome, sol, nodes) = solver.run();
         total += nodes;
         if outcome == Outcome::Solved {

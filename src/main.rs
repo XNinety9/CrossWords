@@ -1,6 +1,6 @@
 use motscroises::{
-    Definitions, Dictionary, FillOptions, Fleches, FlechesOptions, GenerateOptions, Grid, Solution,
-    autodefs, fill, fill_fleches, generate, generate_fleches, wordlist,
+    Definitions, Dictionary, FillOptions, Fleches, FlechesOptions, GenerateOptions, Grid, LEVELS,
+    Solution, autodefs, fill, fill_fleches, generate, generate_fleches, level_settings, wordlist,
 };
 use std::fs::{File, OpenOptions};
 use std::io::{BufReader, Write as _};
@@ -28,11 +28,17 @@ ENTRÉES
   --defs FICHIER       Définitions pour les mots fléchés : MOT<TAB>définition.
                        Elles priment sur le cache de définitions
                        (definitions.txt du dossier de cache), toujours lu
-  --auto-defs          Mots fléchés : fait rédiger par Claude Haiku 5.5 les
-                       définitions absentes (clé ANTHROPIC_API_KEY) et les
+  --auto-defs          Mots fléchés : fait rédiger les définitions absentes
+                       (Claude Haiku 5.5 aux niveaux 1 et 2, Opus 5.5 aux
+                       niveaux 3 et 4 ; clé ANTHROPIC_API_KEY) et les
                        enregistre dans le cache de définitions, à relire
   --numeros            Mots fléchés : numéros dans les cases définitions,
                        définitions numérotées sous la grille
+  --niveau N           Mots fléchés : difficulté de 1 (facile) à 4 (très
+                       difficile), défaut 2. Règle le vocabulaire, la densité
+                       de cases définitions et le style des définitions
+                       rédigées par --auto-defs ; --min-score et --blacks
+                       restent prioritaires
 
 OPTIONS
   --seed N             Graine (défaut : tirée de l'horloge, affichée)
@@ -54,6 +60,9 @@ OPTIONS
 /// Seuil de fréquence appliqué par défaut à la liste téléchargée.
 const DEFAULT_MIN_SCORE: u32 = 12;
 
+/// Niveau des mots fléchés sans --niveau.
+const DEFAULT_LEVEL: u8 = 2;
+
 struct Args {
     dict: Option<String>,
     size: (usize, usize),
@@ -72,6 +81,7 @@ struct Args {
     missing: bool,
     auto_defs: bool,
     numbered: bool,
+    level: Option<u8>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -93,6 +103,7 @@ fn parse_args() -> Result<Args, String> {
         missing: false,
         auto_defs: false,
         numbered: false,
+        level: None,
     };
     let mut it = std::env::args().skip(1);
     fn val<T: std::str::FromStr>(
@@ -137,6 +148,13 @@ fn parse_args() -> Result<Args, String> {
             "--missing" => a.missing = true,
             "--auto-defs" => a.auto_defs = true,
             "--numeros" | "--numéros" => a.numbered = true,
+            "--niveau" | "--level" => {
+                let n: u8 = val(&mut it, &arg)?;
+                if !LEVELS.contains(&n) {
+                    return Err(format!("niveau invalide : {n} (attendu 1 à 4)"));
+                }
+                a.level = Some(n);
+            }
             other => return Err(format!("argument inconnu : {other}")),
         }
     }
@@ -146,16 +164,25 @@ fn parse_args() -> Result<Args, String> {
     if a.numbered && !a.fleches {
         return Err("--numeros ne sert qu'avec --fleches".into());
     }
+    if a.level.is_some() && !a.fleches {
+        return Err("--niveau ne sert qu'avec --fleches".into());
+    }
     Ok(a)
 }
 
 fn run() -> Result<(), String> {
     let args = parse_args()?;
+    let level = args.level.unwrap_or(DEFAULT_LEVEL);
+    let settings = level_settings(level);
     let (path, min_score) = match &args.dict {
         Some(p) => (p.into(), args.min_score.unwrap_or(0)),
         None => (
             wordlist::french(|m| eprintln!("{m}")).map_err(|e| e.to_string())?,
-            args.min_score.unwrap_or(DEFAULT_MIN_SCORE),
+            args.min_score.unwrap_or(if args.fleches {
+                settings.min_score
+            } else {
+                DEFAULT_MIN_SCORE
+            }),
         ),
     };
     let t0 = Instant::now();
@@ -163,6 +190,9 @@ fn run() -> Result<(), String> {
     let dict =
         Dictionary::from_reader(BufReader::new(file), min_score).map_err(|e| e.to_string())?;
     eprintln!("Dictionnaire : {dict} chargés en {:.2?}", t0.elapsed());
+    if args.fleches {
+        eprintln!("Niveau : {level}");
+    }
 
     let seed = args.seed.unwrap_or_else(|| {
         SystemTime::now()
@@ -184,6 +214,9 @@ fn run() -> Result<(), String> {
             seed,
             ..Default::default()
         };
+        if args.fleches {
+            o.score_weight = settings.score_weight;
+        }
         if let Some(n) = args.attempts {
             o.attempts = n;
         }
@@ -198,20 +231,21 @@ fn run() -> Result<(), String> {
         // Les définitions de --defs priment ; le cache complète et reçoit
         // celles que rédige --auto-defs.
         let cache_path = wordlist::cache_dir().map(|d| d.join("definitions.txt"));
-        let mut defs = match &args.defs {
+        let mut all = match &args.defs {
             Some(p) => load_definitions(Path::new(p))?,
             None => Definitions::default(),
         };
         if let Some(p) = cache_path.as_ref().filter(|p| p.is_file()) {
-            defs.extend_missing(load_definitions(p)?);
+            all.extend_missing(load_definitions(p)?);
         }
+        let mut defs = all.at_level(level);
         let fl = if let Some(grid) = &template {
             let fl = fill_fleches(&dict, grid, &fill_opts).map_err(|e| e.to_string())?;
             eprintln!("Remplie en {:.2?}", t1.elapsed());
             fl
         } else {
             let (w, h) = args.size;
-            let mut o = FlechesOptions::new(w, h);
+            let mut o = FlechesOptions::new(w, h).with_level(level);
             o.seed = seed;
             if let Some(r) = args.blacks {
                 o.inner_ratio = r;
@@ -239,11 +273,11 @@ fn run() -> Result<(), String> {
             if !missing.is_empty() {
                 let path =
                     cache_path.ok_or("aucun dossier de cache : définir MOTSCROISES_CACHE")?;
-                let r = autodefs::generate(&missing, &defs, |m| eprintln!("{m}"))
+                let r = autodefs::generate(&missing, &defs, level, |m| eprintln!("{m}"))
                     .map_err(|e| e.to_string())?;
-                append_definitions(&path, &r.definitions)?;
+                append_definitions(&path, &r.definitions, level, &r.model)?;
                 for (w, def) in &r.definitions {
-                    defs.insert(w, def);
+                    defs.insert_level(w, def, level);
                 }
                 eprintln!(
                     "{} définition(s) ajoutée(s) à {}, à relire ({} jetons en entrée, {} en sortie)",
@@ -310,7 +344,12 @@ fn load_definitions(path: &Path) -> Result<Definitions, String> {
 
 /// Ajoute des définitions générées à la fin du fichier, sous un en-tête qui
 /// les signale à la relecture.
-fn append_definitions(path: &Path, defs: &[(String, String)]) -> Result<(), String> {
+fn append_definitions(
+    path: &Path,
+    defs: &[(String, String)],
+    level: u8,
+    model: &str,
+) -> Result<(), String> {
     if defs.is_empty() {
         return Ok(());
     }
@@ -318,9 +357,9 @@ fn append_definitions(path: &Path, defs: &[(String, String)]) -> Result<(), Stri
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir).map_err(err)?;
     }
-    let mut text = format!("# Rédigées par {} : à relire\n", autodefs::MODEL);
+    let mut text = format!("# Rédigées par {model}, niveau {level} : à relire\n");
     for (w, d) in defs {
-        text.push_str(&format!("{w}\t{d}\n"));
+        text.push_str(&format!("{w}\t{d}\t{level}\n"));
     }
     OpenOptions::new()
         .create(true)
