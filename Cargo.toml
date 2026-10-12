@@ -1,0 +1,15 @@
+[package]
+name = "motscroises"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Générateur de grilles de mots croisés à la française (cases noires, remplissage par CSP)"
+license = "MIT OR Apache-2.0"
+keywords = ["crossword", "mots-croises", "puzzle", "csp", "french"]
+categories = ["games", "algorithms", "command-line-utilities"]
+
+[dependencies]
+
+[profile.release]
+lto = true
+codegen-units = 1
