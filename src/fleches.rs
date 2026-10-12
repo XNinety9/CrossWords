@@ -159,6 +159,28 @@ impl Definitions {
         v.get(h % v.len()).map(String::as_str)
     }
 
+    /// Ajoute les mots de `other` absents d'ici : les définitions déjà
+    /// présentes priment.
+    pub fn extend_missing(&mut self, other: Definitions) {
+        for (k, v) in other.map {
+            self.map.entry(k).or_insert(v);
+        }
+    }
+
+    /// Couples (mot, définition) triés par mot, une définition par mot.
+    pub fn entries(&self) -> Vec<(String, &str)> {
+        let mut v: Vec<(String, &str)> = self
+            .map
+            .iter()
+            .filter_map(|(k, defs)| {
+                let w = k.iter().map(|&l| letter_char(l)).collect();
+                defs.first().map(|d| (w, d.as_str()))
+            })
+            .collect();
+        v.sort();
+        v
+    }
+
     pub fn len(&self) -> usize {
         self.map.len()
     }
@@ -225,6 +247,32 @@ impl Fleches {
         s
     }
 
+    /// Définitions numérotées en ordre de lecture : case par case, puis de
+    /// haut en bas dans une case.
+    pub fn numbered_clues(&self) -> Vec<(usize, &Clue)> {
+        let g = &self.solution.grid;
+        let mut v = Vec::new();
+        for r in 0..g.height() {
+            for c in 0..g.width() {
+                for clue in self.clues_at(r, c) {
+                    v.push((v.len() + 1, clue));
+                }
+            }
+        }
+        v
+    }
+
+    /// Liste numérotée des définitions, comme sous une grille à numéros.
+    pub fn numbered_clue_list(&self, defs: Option<&Definitions>) -> String {
+        let mut s = String::new();
+        for (n, clue) in self.numbered_clues() {
+            let word = &self.solution.entries[clue.entry].word;
+            let def = defs.and_then(|d| d.get(word)).unwrap_or("");
+            let _ = writeln!(s, "  {n:>3}. {}  {:<16} {}", clue.arrow.symbol(), word, def);
+        }
+        s
+    }
+
     /// Mots qui n'ont pas de définition dans `defs`, triés et sans doublon :
     /// pratique pour savoir quoi rédiger.
     pub fn missing_definitions(&self, defs: Option<&Definitions>) -> Vec<String> {
@@ -240,12 +288,31 @@ impl Fleches {
         v
     }
 
-    /// Rendu SVG. Sans définition connue, la case affiche la longueur du mot.
+    /// Rendu SVG, définitions dans les cases. Sans définition connue, la case
+    /// affiche la longueur du mot.
     pub fn to_svg(&self, with_letters: bool, defs: Option<&Definitions>) -> String {
+        self.render(with_letters, defs, false)
+    }
+
+    /// Rendu SVG à numéros : les cases définitions portent un numéro et une
+    /// flèche, les définitions numérotées sont listées sous la grille.
+    pub fn to_svg_numbered(&self, with_letters: bool, defs: Option<&Definitions>) -> String {
+        self.render(with_letters, defs, true)
+    }
+
+    fn render(&self, with_letters: bool, defs: Option<&Definitions>, numbered: bool) -> String {
         const C: usize = 64;
         const P: usize = 4;
         let g = &self.solution.grid;
-        let (w, h) = (P * 2 + g.width() * C, P * 2 + g.height() * C);
+        let numbers: HashMap<(usize, usize, Arrow), usize> = self
+            .numbered_clues()
+            .into_iter()
+            .map(|(n, c)| ((c.row, c.col, c.arrow), n))
+            .collect();
+        let grid_h = g.height() * C;
+        let list = numbered.then(|| self.clue_columns(defs, g.width() * C));
+        let list_h = list.as_ref().map_or(0, |l| l.height);
+        let (w, h) = (P * 2 + g.width() * C, P * 2 + grid_h + list_h);
         let mut s = String::new();
         let _ = write!(
             s,
@@ -295,19 +362,30 @@ impl Fleches {
                             );
                         }
                         for (k, clue) in clues.iter().enumerate() {
-                            let text = self.clue_text(clue, defs);
-                            let lines = wrap(&text, 11, if n == 2 { 3 } else { 6 });
                             let top = y + k * part;
-                            let lh = 9;
-                            let y0 = top + part / 2 + lh / 2 - (lines.len() * lh) / 2 + 2;
-                            for (j, line) in lines.iter().enumerate() {
+                            if numbered {
+                                let size = if n == 2 { 14 } else { 18 };
                                 let _ = write!(
                                     s,
-                                    r#"<text x="{}" y="{}" font-size="8.5" text-anchor="middle">{}</text>"#,
+                                    r#"<text x="{}" y="{}" font-size="{size}" font-weight="bold" text-anchor="middle">{}</text>"#,
                                     x + C / 2,
-                                    y0 + j * lh,
-                                    xml_escape(line)
+                                    top + part / 2 + size / 3,
+                                    numbers[&(clue.row, clue.col, clue.arrow)]
                                 );
+                            } else {
+                                let text = self.clue_text(clue, defs);
+                                let lines = wrap(&text, 11, if n == 2 { 3 } else { 6 });
+                                let lh = 9;
+                                let y0 = top + part / 2 + lh / 2 - (lines.len() * lh) / 2 + 2;
+                                for (j, line) in lines.iter().enumerate() {
+                                    let _ = write!(
+                                        s,
+                                        r#"<text x="{}" y="{}" font-size="8.5" text-anchor="middle">{}</text>"#,
+                                        x + C / 2,
+                                        y0 + j * lh,
+                                        xml_escape(line)
+                                    );
+                                }
                             }
                             let shared_bottom = clue.arrow == Arrow::Down
                                 && clues.iter().any(|o| o.arrow == Arrow::DownRight);
@@ -332,9 +410,92 @@ impl Fleches {
             g.height() * C
         );
         s.push_str(&arrows);
+        if let Some(list) = list {
+            let y0 = P + grid_h;
+            let _ = write!(
+                s,
+                r#"<text x="{P}" y="{}" font-size="15" font-weight="bold">Définitions</text>"#,
+                y0 + LIST_TITLE - 8
+            );
+            for e in &list.entries {
+                let (x, y) = (P + e.column * list.column_width, y0 + LIST_TITLE + e.y);
+                let _ = write!(
+                    s,
+                    r#"<text x="{}" y="{}" font-size="{LIST_FONT}" font-weight="bold" text-anchor="end">{}</text>"#,
+                    x + LIST_NUM_W - 8,
+                    y + LIST_LH,
+                    e.number
+                );
+                for (j, line) in e.lines.iter().enumerate() {
+                    let _ = write!(
+                        s,
+                        r#"<text x="{}" y="{}" font-size="{LIST_FONT}">{}</text>"#,
+                        x + LIST_NUM_W,
+                        y + LIST_LH * (j + 1),
+                        xml_escape(line)
+                    );
+                }
+            }
+        }
         s.push_str("</svg>\n");
         s
     }
+
+    /// Mise en page des définitions numérotées sur deux colonnes, la
+    /// première remplie d'abord.
+    fn clue_columns(&self, defs: Option<&Definitions>, width: usize) -> ClueColumns {
+        let column_width = width / 2;
+        // Environ 0,5 em par caractère en Helvetica.
+        let chars = (column_width - LIST_NUM_W - 12) * 2 / LIST_FONT;
+        let mut entries: Vec<ListEntry> = self
+            .numbered_clues()
+            .into_iter()
+            .map(|(number, clue)| ListEntry {
+                number,
+                lines: wrap(&self.clue_text(clue, defs), chars, 4),
+                column: 0,
+                y: 0,
+            })
+            .collect();
+        let block = |e: &ListEntry| e.lines.len() * LIST_LH + LIST_GAP;
+        let total: usize = entries.iter().map(block).sum();
+        let (mut y, mut column, mut height) = (0, 0, 0);
+        for e in &mut entries {
+            if column == 0 && y > 0 && y + block(e) / 2 > total.div_ceil(2) {
+                column = 1;
+                y = 0;
+            }
+            e.column = column;
+            e.y = y;
+            y += block(e);
+            height = height.max(y);
+        }
+        ClueColumns {
+            entries,
+            column_width,
+            height: LIST_TITLE + height + LIST_GAP,
+        }
+    }
+}
+
+const LIST_FONT: usize = 13;
+const LIST_LH: usize = 17;
+const LIST_GAP: usize = 5;
+const LIST_NUM_W: usize = 36;
+const LIST_TITLE: usize = 34;
+
+struct ListEntry {
+    number: usize,
+    lines: Vec<String>,
+    column: usize,
+    /// Décalage vertical dans la colonne.
+    y: usize,
+}
+
+struct ClueColumns {
+    entries: Vec<ListEntry>,
+    column_width: usize,
+    height: usize,
 }
 
 /// Petite flèche dessinée dans la case visée, contre le bord de la case définition.
@@ -452,8 +613,8 @@ impl FlechesOptions {
             inner_ratio: default_inner_ratio(width, height),
             max_word_len: width.max(height),
             seed: 0,
-            attempts: 200,
-            node_budget: 30_000,
+            attempts: 1_000,
+            node_budget: 200,
         }
     }
 }
@@ -692,6 +853,37 @@ mod tests {
         assert!(d.get("Été").is_some());
         assert_eq!(d.get("CHAT"), Some("Félin"));
         assert!(d.get("CHIEN").is_none());
+    }
+
+    #[test]
+    fn numbering_and_numbered_svg() {
+        let g = Grid::parse("#A#B#\nCDEFG\n#HIJK\nLMNOP\n#QRST").unwrap();
+        let fl = Fleches::from_solution(Solution::from_grid(g), true).unwrap();
+        let nums = fl.numbered_clues();
+        assert_eq!(nums.len(), fl.clues.len());
+        // Ordre de lecture : la case I 1 (deux définitions) d'abord.
+        assert_eq!((nums[0].1.row, nums[0].1.col), (0, 0));
+        assert_eq!((nums[1].1.row, nums[1].1.col), (0, 0));
+        assert_eq!(nums[0].1.arrow, Arrow::RightDown);
+        assert!(nums.iter().enumerate().all(|(i, (n, _))| *n == i + 1));
+        let mut defs = Definitions::default();
+        defs.insert("CDEFG", "Une & définition");
+        let svg = fl.to_svg_numbered(false, Some(&defs));
+        assert!(svg.contains(">Définitions<"));
+        assert!(svg.contains("Une &amp; définition"));
+        assert!(svg.contains(&format!(">{}<", nums.len())));
+        assert!(!fl.to_svg(false, Some(&defs)).contains(">Définitions<"));
+        let list = fl.numbered_clue_list(Some(&defs));
+        assert_eq!(list.lines().count(), nums.len());
+    }
+
+    #[test]
+    fn user_definitions_take_precedence() {
+        let mut user = Definitions::from_reader("NI\tA moi\n".as_bytes()).unwrap();
+        let cache = Definitions::from_reader("NI\tCache\nOR\tMétal\n".as_bytes()).unwrap();
+        user.extend_missing(cache);
+        assert_eq!(user.get("NI"), Some("A moi"));
+        assert_eq!(user.get("OR"), Some("Métal"));
     }
 
     #[test]

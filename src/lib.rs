@@ -14,12 +14,16 @@
 //! Mots fléchés : [`generate_fleches`] et [`fill_fleches`], qui rattachent en
 //! plus chaque mot à sa case définition et à sa flèche (voir [`Fleches`]).
 //!
-//! Le remplissage est un problème de satisfaction de contraintes résolu par
-//! recherche en profondeur avec heuristique MRV, vérification en avant sur
-//! les emplacements croisés et redémarrages aléatoires. Les candidats sont
-//! comptés par ET de bitsets (voir [`Dictionary`]). Aucune dépendance, et un
-//! résultat entièrement déterminé par la graine : même dictionnaire, mêmes
-//! options, même grille.
+//! Le remplissage est un problème de satisfaction de contraintes : lettres
+//! possibles par case et mots candidats par emplacement (bitsets, voir
+//! [`Dictionary`]), propagés jusqu'au point fixe ; recherche en profondeur
+//! sur l'emplacement le plus contraint, mot le moins contraignant d'abord ;
+//! budget de nœuds court et nouveaux tirages plutôt qu'une recherche
+//! acharnée. Aucune dépendance, et un résultat entièrement déterminé par la
+//! graine : même dictionnaire, mêmes options, même grille.
+//!
+//! Sans dictionnaire sous la main, [`wordlist::french`] télécharge (une seule
+//! fois) une liste française avec fréquences d'usage.
 //!
 //! ```
 //! use motscroises::{Dictionary, Grid, FillOptions, fill};
@@ -30,12 +34,15 @@
 //! assert_eq!(sol.entries.len(), 6);
 //! ```
 
+pub mod autodefs;
 mod dict;
 mod fleches;
 mod grid;
+mod json;
 mod pattern;
 mod rng;
 mod solver;
+pub mod wordlist;
 
 pub use dict::{Dictionary, Letter, letter_char, normalize};
 pub use fleches::{
@@ -102,8 +109,8 @@ impl Default for FillOptions {
     fn default() -> Self {
         FillOptions {
             seed: 0,
-            node_budget: 20_000,
-            attempts: 20,
+            node_budget: 300,
+            attempts: 15,
         }
     }
 }
@@ -151,8 +158,8 @@ impl GenerateOptions {
         GenerateOptions {
             pattern: PatternOptions::new(width, height),
             seed: 0,
-            attempts: 200,
-            node_budget: 30_000,
+            attempts: 1_000,
+            node_budget: 200,
         }
     }
 }

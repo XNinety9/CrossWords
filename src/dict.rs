@@ -36,14 +36,15 @@ impl Bucket {
         &self.letters[i * self.len..(i + 1) * self.len]
     }
 
+    /// Bitset des mots ayant la lettre `letter` en position `pos`.
     #[inline]
-    fn slice(&self, pos: usize, letter: Letter) -> &[u64] {
+    pub(crate) fn slice(&self, pos: usize, letter: Letter) -> &[u64] {
         let off = (pos * 26 + letter as usize) * self.nw;
         &self.index[off..off + self.nw]
     }
 
     /// Masque du dernier mot de 64 bits (les bits au-delà de `count()` sont faux).
-    fn tail_mask(&self) -> u64 {
+    pub(crate) fn tail_mask(&self) -> u64 {
         match self.count() % 64 {
             0 => u64::MAX,
             r => (1u64 << r) - 1,
@@ -88,6 +89,7 @@ impl Bucket {
         n
     }
 
+    #[cfg(test)]
     pub(crate) fn matching(&self, pattern: &[Option<Letter>], used: &[u64]) -> Vec<u32> {
         let mut out = Vec::new();
         self.for_each_block(pattern, used, |w, mut acc| {
@@ -182,17 +184,17 @@ impl Dictionary {
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
-            let mut parts = line.split(['\t', ' ', ';', ',']).filter(|s| !s.is_empty());
-            let word = parts.next().unwrap_or_default().to_string();
-            let score = match parts.next() {
-                Some(s) => s
-                    .parse::<f64>()
-                    .map(|f| f.max(0.0).round() as u32)
-                    .unwrap_or(1),
-                None => 1,
+            // Le score éventuel est le dernier champ ; sans score numérique,
+            // toute la ligne est le mot (une locution sera donc écartée).
+            let (word, score) = match line.rfind(['\t', ' ', ';', ',']) {
+                Some(i) => match line[i + 1..].parse::<f64>() {
+                    Ok(f) => (line[..i].trim(), f.max(0.0).round() as u32),
+                    Err(_) => (line, 1),
+                },
+                None => (line, 1),
             };
             if score >= min_score {
-                entries.push((word, score));
+                entries.push((word.to_string(), score));
             }
         }
         Ok(Self::from_scored(entries))
@@ -326,10 +328,16 @@ mod tests {
 
     #[test]
     fn reader_with_scores() {
-        let txt = "# commentaire\nchat\t10\nchien 3\n\nloup;20\n";
+        let txt = "# commentaire\nchat\t10\nchien 3\n\nloup;20\nsri lankais\t9\na priori\nmer\n";
+        let d = Dictionary::from_reader(txt.as_bytes(), 1).unwrap();
+        assert_eq!(d.len(), 4);
+        assert!(d.contains("chat"));
+        assert!(d.contains("chien"));
+        assert!(d.contains("mer"));
+        assert!(!d.contains("sri"));
+        assert!(!d.contains("a"));
         let d = Dictionary::from_reader(txt.as_bytes(), 5).unwrap();
         assert_eq!(d.len(), 2);
-        assert!(d.contains("chat"));
         assert!(!d.contains("chien"));
     }
 

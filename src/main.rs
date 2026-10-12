@@ -1,9 +1,10 @@
 use motscroises::{
     Definitions, Dictionary, FillOptions, Fleches, FlechesOptions, GenerateOptions, Grid, Solution,
-    fill, fill_fleches, generate, generate_fleches,
+    autodefs, fill, fill_fleches, generate, generate_fleches, wordlist,
 };
-use std::fs::File;
-use std::io::BufReader;
+use std::fs::{File, OpenOptions};
+use std::io::{BufReader, Write as _};
+use std::path::Path;
 use std::process::ExitCode;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -12,17 +13,26 @@ motscroises : génère des grilles de mots croisés à la française
 et de mots fléchés
 
 USAGE
-  motscroises --dict FICHIER [--size LxH | --template FICHIER] [options]
-  motscroises --fleches --dict FICHIER [--size LxH | --template FICHIER] [options]
+  motscroises [--size LxH | --template FICHIER] [options]
+  motscroises --fleches [--size LxH | --template FICHIER] [options]
 
 ENTRÉES
   --dict FICHIER       Dictionnaire : un mot par ligne, score optionnel après
-                       une tabulation (les accents sont retirés à la lecture)
+                       une tabulation (les accents sont retirés à la lecture).
+                       Par défaut, une liste française avec fréquences est
+                       téléchargée au premier lancement puis mise en cache
   --size LxH           Taille de la grille à générer (défaut : 10x10)
   --template FICHIER   Gabarit à remplir (# noire ou case définition,
                        . vide, lettre imposée)
   --fleches            Mots fléchés au lieu de mots croisés
-  --defs FICHIER       Définitions pour les mots fléchés : MOT<TAB>définition
+  --defs FICHIER       Définitions pour les mots fléchés : MOT<TAB>définition.
+                       Elles priment sur le cache de définitions
+                       (definitions.txt du dossier de cache), toujours lu
+  --auto-defs          Mots fléchés : fait rédiger par Claude Haiku 5.5 les
+                       définitions absentes (clé ANTHROPIC_API_KEY) et les
+                       enregistre dans le cache de définitions, à relire
+  --numeros            Mots fléchés : numéros dans les cases définitions,
+                       définitions numérotées sous la grille
 
 OPTIONS
   --seed N             Graine (défaut : tirée de l'horloge, affichée)
@@ -32,15 +42,20 @@ OPTIONS
   --adjacent           Autorise les cases noires adjacentes (génération)
   --attempts N         Nombre de gabarits ou de redémarrages
   --budget N           Nœuds de recherche par tentative
-  --min-score N        Ignore les mots de score inférieur
+  --min-score N        Ignore les mots de score inférieur (liste par défaut :
+                       12, soit environ 0,1 occurrence par million de mots ;
+                       0 garde toutes les formes, 20 les mots courants)
   --svg FICHIER        Écrit la grille vierge en SVG
   --svg-solution FICH  Écrit la grille remplie en SVG
   --missing            Mots fléchés : liste les mots sans définition
   -h, --help           Affiche cette aide
 ";
 
+/// Seuil de fréquence appliqué par défaut à la liste téléchargée.
+const DEFAULT_MIN_SCORE: u32 = 12;
+
 struct Args {
-    dict: String,
+    dict: Option<String>,
     size: (usize, usize),
     template: Option<String>,
     seed: Option<u64>,
@@ -49,17 +64,19 @@ struct Args {
     adjacent: bool,
     attempts: Option<u32>,
     budget: Option<u64>,
-    min_score: u32,
+    min_score: Option<u32>,
     svg: Option<String>,
     svg_solution: Option<String>,
     fleches: bool,
     defs: Option<String>,
     missing: bool,
+    auto_defs: bool,
+    numbered: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
     let mut a = Args {
-        dict: String::new(),
+        dict: None,
         size: (10, 10),
         template: None,
         seed: None,
@@ -68,12 +85,14 @@ fn parse_args() -> Result<Args, String> {
         adjacent: false,
         attempts: None,
         budget: None,
-        min_score: 0,
+        min_score: None,
         svg: None,
         svg_solution: None,
         fleches: false,
         defs: None,
         missing: false,
+        auto_defs: false,
+        numbered: false,
     };
     let mut it = std::env::args().skip(1);
     fn val<T: std::str::FromStr>(
@@ -92,7 +111,7 @@ fn parse_args() -> Result<Args, String> {
                 print!("{USAGE}");
                 std::process::exit(0);
             }
-            "--dict" => a.dict = val(&mut it, &arg)?,
+            "--dict" => a.dict = Some(val(&mut it, &arg)?),
             "--size" => {
                 let v: String = val(&mut it, &arg)?;
                 let (w, h) = v
@@ -110,27 +129,39 @@ fn parse_args() -> Result<Args, String> {
             "--adjacent" => a.adjacent = true,
             "--attempts" => a.attempts = Some(val(&mut it, &arg)?),
             "--budget" => a.budget = Some(val(&mut it, &arg)?),
-            "--min-score" => a.min_score = val(&mut it, &arg)?,
+            "--min-score" => a.min_score = Some(val(&mut it, &arg)?),
             "--svg" => a.svg = Some(val(&mut it, &arg)?),
             "--svg-solution" => a.svg_solution = Some(val(&mut it, &arg)?),
             "--fleches" | "--fléchés" => a.fleches = true,
             "--defs" => a.defs = Some(val(&mut it, &arg)?),
             "--missing" => a.missing = true,
+            "--auto-defs" => a.auto_defs = true,
+            "--numeros" | "--numéros" => a.numbered = true,
             other => return Err(format!("argument inconnu : {other}")),
         }
     }
-    if a.dict.is_empty() {
-        return Err("--dict est obligatoire".into());
+    if a.auto_defs && !a.fleches {
+        return Err("--auto-defs ne sert qu'avec --fleches".into());
+    }
+    if a.numbered && !a.fleches {
+        return Err("--numeros ne sert qu'avec --fleches".into());
     }
     Ok(a)
 }
 
 fn run() -> Result<(), String> {
     let args = parse_args()?;
+    let (path, min_score) = match &args.dict {
+        Some(p) => (p.into(), args.min_score.unwrap_or(0)),
+        None => (
+            wordlist::french(|m| eprintln!("{m}")).map_err(|e| e.to_string())?,
+            args.min_score.unwrap_or(DEFAULT_MIN_SCORE),
+        ),
+    };
     let t0 = Instant::now();
-    let file = File::open(&args.dict).map_err(|e| format!("{} : {e}", args.dict))?;
+    let file = File::open(&path).map_err(|e| format!("{} : {e}", path.display()))?;
     let dict =
-        Dictionary::from_reader(BufReader::new(file), args.min_score).map_err(|e| e.to_string())?;
+        Dictionary::from_reader(BufReader::new(file), min_score).map_err(|e| e.to_string())?;
     eprintln!("Dictionnaire : {dict} chargés en {:.2?}", t0.elapsed());
 
     let seed = args.seed.unwrap_or_else(|| {
@@ -164,13 +195,16 @@ fn run() -> Result<(), String> {
 
     let t1 = Instant::now();
     if args.fleches {
-        let defs = match &args.defs {
-            Some(p) => {
-                let f = File::open(p).map_err(|e| format!("{p} : {e}"))?;
-                Some(Definitions::from_reader(BufReader::new(f)).map_err(|e| e.to_string())?)
-            }
-            None => None,
+        // Les définitions de --defs priment ; le cache complète et reçoit
+        // celles que rédige --auto-defs.
+        let cache_path = wordlist::cache_dir().map(|d| d.join("definitions.txt"));
+        let mut defs = match &args.defs {
+            Some(p) => load_definitions(Path::new(p))?,
+            None => Definitions::default(),
         };
+        if let Some(p) = cache_path.as_ref().filter(|p| p.is_file()) {
+            defs.extend_missing(load_definitions(p)?);
+        }
         let fl = if let Some(grid) = &template {
             let fl = fill_fleches(&dict, grid, &fill_opts).map_err(|e| e.to_string())?;
             eprintln!("Remplie en {:.2?}", t1.elapsed());
@@ -200,7 +234,30 @@ fn run() -> Result<(), String> {
             );
             fl
         };
-        report_fleches(&fl, defs.as_ref(), &args)
+        if args.auto_defs {
+            let missing = fl.missing_definitions(Some(&defs));
+            if !missing.is_empty() {
+                let path =
+                    cache_path.ok_or("aucun dossier de cache : définir MOTSCROISES_CACHE")?;
+                let r = autodefs::generate(&missing, &defs, |m| eprintln!("{m}"))
+                    .map_err(|e| e.to_string())?;
+                append_definitions(&path, &r.definitions)?;
+                for (w, def) in &r.definitions {
+                    defs.insert(w, def);
+                }
+                eprintln!(
+                    "{} définition(s) ajoutée(s) à {}, à relire ({} jetons en entrée, {} en sortie)",
+                    r.definitions.len(),
+                    path.display(),
+                    r.input_tokens,
+                    r.output_tokens
+                );
+                if !r.rejected.is_empty() {
+                    eprintln!("Sans définition valable :\n  {}", r.rejected.join("\n  "));
+                }
+            }
+        }
+        report_fleches(&fl, Some(&defs), &args)
     } else {
         let solution = if let Some(grid) = &template {
             let sol = fill(&dict, grid, &fill_opts).map_err(|e| e.to_string())?;
@@ -246,6 +303,33 @@ fn stats_line(sol: &Solution, what: &str) {
     );
 }
 
+fn load_definitions(path: &Path) -> Result<Definitions, String> {
+    let f = File::open(path).map_err(|e| format!("{} : {e}", path.display()))?;
+    Definitions::from_reader(BufReader::new(f)).map_err(|e| format!("{} : {e}", path.display()))
+}
+
+/// Ajoute des définitions générées à la fin du fichier, sous un en-tête qui
+/// les signale à la relecture.
+fn append_definitions(path: &Path, defs: &[(String, String)]) -> Result<(), String> {
+    if defs.is_empty() {
+        return Ok(());
+    }
+    let err = |e: std::io::Error| format!("{} : {e}", path.display());
+    if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir).map_err(err)?;
+    }
+    let mut text = format!("# Rédigées par {} : à relire\n", autodefs::MODEL);
+    for (w, d) in defs {
+        text.push_str(&format!("{w}\t{d}\n"));
+    }
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .and_then(|mut f| f.write_all(text.as_bytes()))
+        .map_err(err)
+}
+
 fn write_file(path: &str, content: String) -> Result<(), String> {
     std::fs::write(path, content).map_err(|e| format!("{path} : {e}"))
 }
@@ -265,8 +349,13 @@ fn report_crossword(solution: &Solution, args: &Args) -> Result<(), String> {
 
 fn report_fleches(fl: &Fleches, defs: Option<&Definitions>, args: &Args) -> Result<(), String> {
     println!("{}", fl.solution);
-    println!("Définitions (case, flèche, mot)");
-    print!("{}", fl.clue_list(defs));
+    if args.numbered {
+        println!("Définitions (numéro, flèche, mot)");
+        print!("{}", fl.numbered_clue_list(defs));
+    } else {
+        println!("Définitions (case, flèche, mot)");
+        print!("{}", fl.clue_list(defs));
+    }
     stats_line(&fl.solution, "cases définitions");
     if args.missing {
         println!("Mots sans définition");
@@ -274,13 +363,20 @@ fn report_fleches(fl: &Fleches, defs: Option<&Definitions>, args: &Args) -> Resu
             println!("{w}");
         }
     }
+    let svg = |f: &Fleches, letters: bool| {
+        if args.numbered {
+            f.to_svg_numbered(letters, defs)
+        } else {
+            f.to_svg(letters, defs)
+        }
+    };
     if let Some(p) = &args.svg {
         let mut b = fl.clone();
         b.solution.grid = blank(&fl.solution.grid);
-        write_file(p, b.to_svg(false, defs))?;
+        write_file(p, svg(&b, false))?;
     }
     if let Some(p) = &args.svg_solution {
-        write_file(p, fl.to_svg(true, defs))?;
+        write_file(p, svg(fl, true))?;
     }
     Ok(())
 }
