@@ -1,4 +1,4 @@
-use motscroises::{
+use crosswords::{
     Definitions, Dictionary, FillOptions, Fleches, FlechesOptions, GenerateOptions, Grid, LEVELS,
     Solution, autodefs, fill, fill_fleches, generate, generate_fleches, level_settings, wordlist,
 };
@@ -9,12 +9,12 @@ use std::process::ExitCode;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 const USAGE: &str = "\
-motscroises : génère des grilles de mots croisés à la française
+crosswords : génère des grilles de mots croisés à la française
 et de mots fléchés
 
 USAGE
-  motscroises [--size LxH | --template FICHIER] [options]
-  motscroises --fleches [--size LxH | --template FICHIER] [options]
+  crosswords [--size LxH | --template FICHIER] [options]
+  crosswords --fleches [--size LxH | --template FICHIER] [options]
 
 ENTRÉES
   --dict FICHIER       Dictionnaire : un mot par ligne, score optionnel après
@@ -53,6 +53,9 @@ OPTIONS
                        0 garde toutes les formes, 20 les mots courants)
   --svg FICHIER        Écrit la grille vierge en SVG
   --svg-solution FICH  Écrit la grille remplie en SVG
+  --json FICHIER       Écrit la grille, ses mots et ses définitions en JSON
+                       (format décrit dans docs/format-json.md) ; avec -,
+                       sur la sortie standard à la place du rendu texte
   --missing            Mots fléchés : liste les mots sans définition
   -h, --help           Affiche cette aide
 ";
@@ -76,6 +79,7 @@ struct Args {
     min_score: Option<u32>,
     svg: Option<String>,
     svg_solution: Option<String>,
+    json: Option<String>,
     fleches: bool,
     defs: Option<String>,
     missing: bool,
@@ -98,6 +102,7 @@ fn parse_args() -> Result<Args, String> {
         min_score: None,
         svg: None,
         svg_solution: None,
+        json: None,
         fleches: false,
         defs: None,
         missing: false,
@@ -143,6 +148,7 @@ fn parse_args() -> Result<Args, String> {
             "--min-score" => a.min_score = Some(val(&mut it, &arg)?),
             "--svg" => a.svg = Some(val(&mut it, &arg)?),
             "--svg-solution" => a.svg_solution = Some(val(&mut it, &arg)?),
+            "--json" => a.json = Some(val(&mut it, &arg)?),
             "--fleches" | "--fléchés" => a.fleches = true,
             "--defs" => a.defs = Some(val(&mut it, &arg)?),
             "--missing" => a.missing = true,
@@ -271,8 +277,7 @@ fn run() -> Result<(), String> {
         if args.auto_defs {
             let missing = fl.missing_definitions(Some(&defs));
             if !missing.is_empty() {
-                let path =
-                    cache_path.ok_or("aucun dossier de cache : définir MOTSCROISES_CACHE")?;
+                let path = cache_path.ok_or("aucun dossier de cache : définir CROSSWORDS_CACHE")?;
                 let r = autodefs::generate(&missing, &defs, level, |m| eprintln!("{m}"))
                     .map_err(|e| e.to_string())?;
                 append_definitions(&path, &r.definitions, level, &r.model)?;
@@ -291,7 +296,7 @@ fn run() -> Result<(), String> {
                 }
             }
         }
-        report_fleches(&fl, Some(&defs), &args)
+        report_fleches(&fl, Some(&defs), &args, seed, level)
     } else {
         let solution = if let Some(grid) = &template {
             let sol = fill(&dict, grid, &fill_opts).map_err(|e| e.to_string())?;
@@ -323,7 +328,7 @@ fn run() -> Result<(), String> {
             );
             sol
         };
-        report_crossword(&solution, &args)
+        report_crossword(&solution, &args, seed)
     }
 }
 
@@ -373,10 +378,29 @@ fn write_file(path: &str, content: String) -> Result<(), String> {
     std::fs::write(path, content).map_err(|e| format!("{path} : {e}"))
 }
 
-fn report_crossword(solution: &Solution, args: &Args) -> Result<(), String> {
-    println!("{solution}");
-    print!("{}", solution.word_list());
+/// Écrit l'export JSON dans un fichier, ou sur la sortie standard pour `-`.
+fn write_json(args: &Args, json: impl FnOnce() -> String) -> Result<(), String> {
+    match args.json.as_deref() {
+        Some("-") => {
+            print!("{}", json());
+            Ok(())
+        }
+        Some(p) => write_file(p, json()),
+        None => Ok(()),
+    }
+}
+
+fn json_on_stdout(args: &Args) -> bool {
+    args.json.as_deref() == Some("-")
+}
+
+fn report_crossword(solution: &Solution, args: &Args, seed: u64) -> Result<(), String> {
+    if !json_on_stdout(args) {
+        println!("{solution}");
+        print!("{}", solution.word_list());
+    }
     stats_line(solution, "cases noires");
+    write_json(args, || solution.to_json(Some(seed)))?;
     if let Some(p) = &args.svg {
         write_file(p, blank(&solution.grid).to_svg(false))?;
     }
@@ -386,22 +410,37 @@ fn report_crossword(solution: &Solution, args: &Args) -> Result<(), String> {
     Ok(())
 }
 
-fn report_fleches(fl: &Fleches, defs: Option<&Definitions>, args: &Args) -> Result<(), String> {
-    println!("{}", fl.solution);
-    if args.numbered {
-        println!("Définitions (numéro, flèche, mot)");
-        print!("{}", fl.numbered_clue_list(defs));
-    } else {
-        println!("Définitions (case, flèche, mot)");
-        print!("{}", fl.clue_list(defs));
+fn report_fleches(
+    fl: &Fleches,
+    defs: Option<&Definitions>,
+    args: &Args,
+    seed: u64,
+    level: u8,
+) -> Result<(), String> {
+    let text = !json_on_stdout(args);
+    if text {
+        println!("{}", fl.solution);
+        if args.numbered {
+            println!("Définitions (numéro, flèche, mot)");
+            print!("{}", fl.numbered_clue_list(defs));
+        } else {
+            println!("Définitions (case, flèche, mot)");
+            print!("{}", fl.clue_list(defs));
+        }
     }
     stats_line(&fl.solution, "cases définitions");
     if args.missing {
-        println!("Mots sans définition");
-        for w in fl.missing_definitions(defs) {
-            println!("{w}");
+        // Sur la sortie d'erreur quand le JSON occupe la sortie standard.
+        let missing = fl.missing_definitions(defs);
+        if text {
+            println!("Mots sans définition");
+            missing.iter().for_each(|w| println!("{w}"));
+        } else {
+            eprintln!("Mots sans définition");
+            missing.iter().for_each(|w| eprintln!("{w}"));
         }
     }
+    write_json(args, || fl.to_json(defs, Some(seed), Some(level)))?;
     let svg = |f: &Fleches, letters: bool| {
         if args.numbered {
             f.to_svg_numbered(letters, defs)
@@ -426,7 +465,7 @@ fn blank(g: &Grid) -> Grid {
     for r in 0..b.height() {
         for c in 0..b.width() {
             if !b.get(r, c).is_block() {
-                b.set(r, c, motscroises::Cell::Open(None));
+                b.set(r, c, crosswords::Cell::Open(None));
             }
         }
     }

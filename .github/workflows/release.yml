@@ -1,0 +1,106 @@
+name: release
+
+# Publie une version quand une étiquette vX.Y.Z est poussée : vérification,
+# compilation pour Linux, macOS et Windows, puis release GitHub avec les
+# notes de la section correspondante de CHANGELOG.md.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Étiquette conforme à Cargo.toml
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::étiquette $GITHUB_REF_NAME, mais Cargo.toml annonce $version"
+            exit 1
+          fi
+      - name: Notes de version présentes
+        run: |
+          grep -q "^## \[${GITHUB_REF_NAME#v}\]" CHANGELOG.md || {
+            echo "::error::pas de section ## [${GITHUB_REF_NAME#v}] dans CHANGELOG.md"
+            exit 1
+          }
+      - run: cargo test --release --locked
+
+  build:
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: x86_64-linux, target: x86_64-unknown-linux-musl, os: ubuntu-latest }
+          - { name: x86_64-macos, target: x86_64-apple-darwin, os: macos-latest }
+          - { name: aarch64-macos, target: aarch64-apple-darwin, os: macos-latest }
+          - { name: x86_64-windows, target: x86_64-pc-windows-msvc, os: windows-latest }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Outils musl
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Archive
+        shell: bash
+        run: |
+          dir="crosswords-${GITHUB_REF_NAME}-${{ matrix.name }}"
+          mkdir -p "$dir/docs"
+          cp README.md CHANGELOG.md LICENSE NOTICE "$dir/"
+          cp docs/format-json.md docs/crosswords.schema.json "$dir/docs/"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp "target/${{ matrix.target }}/release/crosswords.exe" "$dir/"
+            7z a "$dir.zip" "$dir" > /dev/null
+          else
+            cp "target/${{ matrix.target }}/release/crosswords" "$dir/"
+            tar czf "$dir.tar.gz" "$dir"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            crosswords-*.tar.gz
+            crosswords-*.zip
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Sommes de contrôle
+        run: cd dist && sha256sum crosswords-* > SHA256SUMS && cat SHA256SUMS
+      - name: Notes de version
+        run: |
+          awk -v v="${GITHUB_REF_NAME#v}" '
+            index($0, "## [" v "]") == 1 { f = 1; next }
+            /^## \[/ { f = 0 }
+            /^\[[^]]*\]: / { next }
+            f
+          ' CHANGELOG.md > notes.md
+          cat notes.md
+      - name: Publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "CrossWords $GITHUB_REF_NAME" \
+            --notes-file notes.md \
+            --verify-tag

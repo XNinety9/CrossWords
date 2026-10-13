@@ -1,0 +1,16 @@
+CrossWords
+Copyright 2026 Pierre (https://github.com/XNinety9)
+
+Ce logiciel est distribué sous licence Apache 2.0 (fichier LICENSE).
+Toute redistribution, modifiée ou non, doit conserver ce fichier NOTICE ou
+en reproduire le contenu, conformément à la section 4 (d) de la licence.
+
+Données téléchargées à l'exécution, non incluses dans ce dépôt :
+
+- an-array-of-french-words 2.0.0, licence MIT
+  https://github.com/words/an-array-of-french-words
+- Lexique 3.83, licence CC BY-SA 4.0
+  http://www.lexique.org
+  New, B., Pallier, C., Brysbaert, M., Ferrand, L. (2004). Lexique 2 : A New
+  French Lexical Database. Behavior Research Methods, Instruments, &
+  Computers, 36(3), 516-524.

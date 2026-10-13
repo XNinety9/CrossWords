@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/XNinety9/CrossWords/blob/master/docs/crosswords.schema.json",
+  "title": "Grille CrossWords",
+  "description": "Grille de mots croisés ou de mots fléchés exportée par CrossWords (--json). Voir docs/format-json.md.",
+  "type": "object",
+  "required": ["format", "version", "type", "largeur", "hauteur", "graine", "niveau", "grille", "mots", "definitions"],
+  "additionalProperties": false,
+  "properties": {
+    "format": { "const": "crosswords" },
+    "version": { "const": 1 },
+    "type": { "enum": ["croises", "fleches"] },
+    "largeur": { "type": "integer", "minimum": 1 },
+    "hauteur": { "type": "integer", "minimum": 1 },
+    "graine": { "type": ["integer", "null"], "minimum": 0 },
+    "niveau": { "type": ["integer", "null"], "minimum": 1, "maximum": 4 },
+    "grille": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[A-Z#.]+$" }
+    },
+    "mots": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "mot", "sens", "ligne", "colonne", "longueur"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "integer", "minimum": 0 },
+          "mot": { "type": "string", "pattern": "^[A-Z.]{2,}$" },
+          "sens": { "enum": ["horizontal", "vertical"] },
+          "ligne": { "type": "integer", "minimum": 0 },
+          "colonne": { "type": "integer", "minimum": 0 },
+          "longueur": { "type": "integer", "minimum": 2 }
+        }
+      }
+    },
+    "definitions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["numero", "ligne", "colonne", "fleche", "mot", "texte"],
+        "additionalProperties": false,
+        "properties": {
+          "numero": { "type": "integer", "minimum": 1 },
+          "ligne": { "type": "integer", "minimum": 0 },
+          "colonne": { "type": "integer", "minimum": 0 },
+          "fleche": { "enum": ["droite", "bas", "droite-bas", "bas-droite"] },
+          "mot": { "type": "integer", "minimum": 0 },
+          "texte": { "type": ["string", "null"] }
+        }
+      }
+    }
+  },
+  "if": { "properties": { "type": { "const": "croises" } } },
+  "then": { "properties": { "niveau": { "const": null }, "definitions": { "maxItems": 0 } } }
+}

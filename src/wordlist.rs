@@ -44,18 +44,18 @@ const LEXIQUE: Source = Source {
 /// évolue, pour forcer la régénération.
 const MERGED: &str = "fr-v2.txt";
 
-/// Dossier de cache : `$MOTSCROISES_CACHE`, sinon `$XDG_CACHE_HOME/motscroises`,
-/// sinon `~/.cache/motscroises` (`%LOCALAPPDATA%\motscroises` sous Windows).
+/// Dossier de cache : `$CROSSWORDS_CACHE`, sinon `$XDG_CACHE_HOME/crosswords`,
+/// sinon `~/.cache/crosswords` (`%LOCALAPPDATA%\crosswords` sous Windows).
 pub fn cache_dir() -> Option<PathBuf> {
     let env = |k| {
         std::env::var_os(k)
             .filter(|v| !v.is_empty())
             .map(PathBuf::from)
     };
-    env("MOTSCROISES_CACHE")
-        .or_else(|| env("XDG_CACHE_HOME").map(|p| p.join("motscroises")))
-        .or_else(|| env("LOCALAPPDATA").map(|p| p.join("motscroises")))
-        .or_else(|| env("HOME").map(|p| p.join(".cache").join("motscroises")))
+    env("CROSSWORDS_CACHE")
+        .or_else(|| env("XDG_CACHE_HOME").map(|p| p.join("crosswords")))
+        .or_else(|| env("LOCALAPPDATA").map(|p| p.join("crosswords")))
+        .or_else(|| env("HOME").map(|p| p.join(".cache").join("crosswords")))
 }
 
 /// Chemin de la liste française prête à l'emploi, téléchargée et construite
@@ -64,7 +64,7 @@ pub fn french(mut log: impl FnMut(&str)) -> io::Result<PathBuf> {
     let dir = cache_dir().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::NotFound,
-            "aucun dossier de cache (définir MOTSCROISES_CACHE)",
+            "aucun dossier de cache (définir CROSSWORDS_CACHE)",
         )
     })?;
     let merged = dir.join(MERGED);
@@ -154,7 +154,7 @@ fn merge(words_json: &str, lexique_tsv: &str) -> io::Result<String> {
         }
     }
     let mut out = String::from(
-        "# Généré par motscroises : an-array-of-french-words 2.0.0 (MIT), \
+        "# Généré par CrossWords : an-array-of-french-words 2.0.0 (MIT), \
          fréquences Lexique 3.83 (CC BY-SA 4.0)\n",
     );
     for (w, f) in &freq {

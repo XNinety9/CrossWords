@@ -238,7 +238,7 @@ pub struct Fleches {
 }
 
 impl Fleches {
-    fn from_solution(solution: Solution, strict: bool) -> Result<Self, String> {
+    pub(crate) fn from_solution(solution: Solution, strict: bool) -> Result<Self, String> {
         let clues = assign_clues(&solution.grid, strict)?;
         Ok(Fleches { solution, clues })
     }

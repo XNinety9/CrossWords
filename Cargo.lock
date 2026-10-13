@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "motscroises"
-version = "0.1.0"
+name = "crosswords"
+version = "1.0.0"

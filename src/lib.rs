@@ -1,4 +1,4 @@
-//! # motscroises
+//! # CrossWords
 //!
 //! Génération de grilles de mots croisés « à la française » et de mots
 //! fléchés : grille rectangulaire avec cases noires (ou cases définitions),
@@ -26,7 +26,7 @@
 //! fois) une liste française avec fréquences d'usage.
 //!
 //! ```
-//! use motscroises::{Dictionary, Grid, FillOptions, fill};
+//! use crosswords::{Dictionary, Grid, FillOptions, fill};
 //!
 //! let dict = Dictionary::from_words(["ABC", "DEF", "GHI", "ADG", "BEH", "CFI"]);
 //! let grid = Grid::parse("...\n...\n...").unwrap();
@@ -36,6 +36,7 @@
 
 pub mod autodefs;
 mod dict;
+mod export;
 mod fleches;
 mod grid;
 mod json;
@@ -45,6 +46,7 @@ mod solver;
 pub mod wordlist;
 
 pub use dict::{Dictionary, Letter, letter_char, normalize};
+pub use export::JSON_FORMAT_VERSION;
 pub use fleches::{
     Arrow, Clue, Definitions, Fleches, FlechesOptions, LEVELS, LevelSettings, assign_clues,
     default_inner_ratio, fill_fleches, generate_fleches, is_valid_fleches_pattern, level_settings,
