@@ -1,9 +1,9 @@
 [package]
 name = "crosswords"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2024"
 rust-version = "1.85"
-description = "Générateur de grilles de mots croisés à la française et de mots fléchés, avec niveaux de difficulté et export JSON"
+description = "Générateur de grilles de mots croisés et de mots fléchés en français et en anglais, avec niveaux de difficulté et export JSON"
 license = "Apache-2.0"
 repository = "https://github.com/XNinety9/CrossWords"
 readme = "README.md"

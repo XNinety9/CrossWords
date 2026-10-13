@@ -1,12 +1,13 @@
 //! Export JSON des grilles, documenté dans `docs/format-json.md`.
 
+use crate::Language;
 use crate::fleches::{Arrow, Definitions, Fleches};
 use crate::grid::{Cell, Solution};
 use crate::json::quote;
 use std::fmt::Write as _;
 
 /// Version du format, à incrémenter à tout changement incompatible.
-pub const JSON_FORMAT_VERSION: u32 = 1;
+pub const JSON_FORMAT_VERSION: u32 = 2;
 
 impl Arrow {
     /// Nom de la flèche dans l'export JSON.
@@ -28,16 +29,21 @@ fn opt<T: std::fmt::Display>(v: Option<T>) -> String {
 /// sérialisées (une entrée par ligne).
 fn document(
     kind: &str,
+    lang: Language,
     sol: &Solution,
     seed: Option<u64>,
     level: Option<u8>,
     definitions: &[String],
 ) -> String {
     let g = &sol.grid;
+    // Numérotation anglo-saxonne des cases, pour les mots croisés seulement :
+    // les mots fléchés numérotent leurs définitions.
+    let numbers = (kind == "croises").then(|| g.numbers());
     let mut s = String::from("{\n");
     let _ = writeln!(s, "  \"format\": \"crosswords\",");
     let _ = writeln!(s, "  \"version\": {JSON_FORMAT_VERSION},");
     let _ = writeln!(s, "  \"type\": {},", quote(kind));
+    let _ = writeln!(s, "  \"langue\": {},", quote(lang.code()));
     let _ = writeln!(s, "  \"largeur\": {},", g.width());
     let _ = writeln!(s, "  \"hauteur\": {},", g.height());
     let _ = writeln!(s, "  \"graine\": {},", opt(seed));
@@ -59,7 +65,8 @@ fn document(
         let sep = if i + 1 < sol.entries.len() { "," } else { "" };
         let _ = writeln!(
             s,
-            "    {{\"id\": {i}, \"mot\": {}, \"sens\": \"{}\", \"ligne\": {}, \"colonne\": {}, \"longueur\": {}}}{sep}",
+            "    {{\"id\": {i}, \"numero\": {}, \"mot\": {}, \"sens\": \"{}\", \"ligne\": {}, \"colonne\": {}, \"longueur\": {}}}{sep}",
+            opt(numbers.as_ref().and_then(|n| n[e.row * g.width() + e.col])),
             quote(&e.word),
             if e.across { "horizontal" } else { "vertical" },
             e.row,
@@ -85,7 +92,12 @@ impl Solution {
     /// Export JSON d'une grille de mots croisés (format décrit dans
     /// `docs/format-json.md`).
     pub fn to_json(&self, seed: Option<u64>) -> String {
-        document("croises", self, seed, None, &[])
+        self.to_json_in(seed, Language::Fr)
+    }
+
+    /// Comme [`Solution::to_json`], pour une grille de la langue `lang`.
+    pub fn to_json_in(&self, seed: Option<u64>, lang: Language) -> String {
+        document("croises", lang, self, seed, None, &[])
     }
 }
 
@@ -97,6 +109,17 @@ impl Fleches {
         defs: Option<&Definitions>,
         seed: Option<u64>,
         level: Option<u8>,
+    ) -> String {
+        self.to_json_in(defs, seed, level, Language::Fr)
+    }
+
+    /// Comme [`Fleches::to_json`], pour une grille de la langue `lang`.
+    pub fn to_json_in(
+        &self,
+        defs: Option<&Definitions>,
+        seed: Option<u64>,
+        level: Option<u8>,
+        lang: Language,
     ) -> String {
         let definitions: Vec<String> = self
             .numbered_clues()
@@ -113,7 +136,7 @@ impl Fleches {
                 )
             })
             .collect();
-        document("fleches", &self.solution, seed, level, &definitions)
+        document("fleches", lang, &self.solution, seed, level, &definitions)
     }
 }
 
@@ -137,7 +160,20 @@ mod tests {
         .unwrap();
         let v = parse(&sol.to_json(Some(7))).expect("JSON valide");
         assert_eq!(v.get("type").and_then(Json::as_str), Some("croises"));
+        assert_eq!(v.get("langue").and_then(Json::as_str), Some("fr"));
+        assert_eq!(num(&v, "version"), 2);
         assert_eq!(num(&v, "graine"), 7);
+        let en = parse(&sol.to_json_in(Some(7), crate::Language::En)).unwrap();
+        assert_eq!(en.get("langue").and_then(Json::as_str), Some("en"));
+        // Carré 3x3 plein : 1 2 3 en haut, 4 et 5 en début de ligne.
+        let numeros: Vec<usize> = en
+            .get("mots")
+            .and_then(Json::as_arr)
+            .unwrap()
+            .iter()
+            .map(|m| num(m, "numero"))
+            .collect();
+        assert_eq!(numeros, vec![1, 4, 5, 1, 2, 3]);
         assert_eq!(v.get("niveau"), Some(&Json::Null));
         assert_eq!(
             v.get("definitions").and_then(Json::as_arr).unwrap().len(),
@@ -177,6 +213,8 @@ mod tests {
         assert_eq!(num(&v, "niveau"), 2);
         let ds = v.get("definitions").and_then(Json::as_arr).unwrap();
         assert_eq!(ds.len(), fl.clues.len());
+        let mots = v.get("mots").and_then(Json::as_arr).unwrap();
+        assert!(mots.iter().all(|m| m.get("numero") == Some(&Json::Null)));
         for (i, d) in ds.iter().enumerate() {
             assert_eq!(num(d, "numero"), i + 1);
             let e = num(d, "mot");

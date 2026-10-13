@@ -1,8 +1,8 @@
 # CrossWords
 
-**Générateur de grilles de mots croisés à la française et de mots fléchés**, en Rust, sans aucune dépendance.
+**Générateur de grilles de mots croisés et de mots fléchés, en français et en anglais**, en Rust, sans aucune dépendance.
 
-Donnez une taille, obtenez une grille remplie de vrais mots français, prête à imprimer : cases noires placées à la française pour les mots croisés, cases définitions et flèches pour les mots fléchés, avec quatre niveaux de difficulté et des définitions rédigées automatiquement si vous le souhaitez.
+Donnez une taille, obtenez une grille remplie de vrais mots, prête à imprimer : cases noires placées à la française pour les mots croisés, cases définitions et flèches pour les mots fléchés, avec quatre niveaux de difficulté et des définitions rédigées automatiquement si vous le souhaitez.
 
 <p align="center">
   <img src="docs/exemple-grille.svg" alt="Grille de mots fléchés 9x11 de niveau 2, définitions dans les cases" width="48%">
@@ -17,7 +17,8 @@ Donnez une taille, obtenez une grille remplie de vrais mots français, prête à
 - **Mots fléchés** : cases définitions portant une ou deux définitions, flèches droites et coudées, définitions dans les cases ou numérotées sous la grille.
 - **Quatre niveaux de difficulté** pour les mots fléchés : vocabulaire, densité de cases définitions et style des définitions, du synonyme direct au jeu de mots.
 - **Définitions automatiques** des mots fléchés par l'API Claude, mises en cache pour resservir.
-- **Dictionnaire français** téléchargé au premier lancement, avec fréquences d'usage pour écarter les mots trop rares.
+- **Deux langues** : français, ou anglais avec `--langue en` (dictionnaire noté par des auteurs de mots croisés, cases numérotées et listes Across/Down).
+- **Dictionnaires** téléchargés au premier lancement, notés pour écarter les mots trop rares.
 - **Sorties** texte, SVG imprimable (grille vierge et solution) et [JSON documenté](docs/format-json.md).
 - **Reproductible** : même graine, mêmes options, même grille.
 - **Rapide** : une grille par défaut se remplit en moins d'une seconde, même en 15x15.
@@ -146,6 +147,64 @@ Avec `--numeros`, les cases définitions ne portent qu'un numéro et leurs flèc
 crosswords --fleches --size 11x13 --niveau 4 --numeros --auto-defs --svg grille.svg
 ```
 
+## En anglais
+
+`--langue en` produit des grilles en anglais, mots croisés comme mots fléchés, avec les mêmes options et les mêmes niveaux :
+
+```sh
+crosswords --langue en --size 8x8 --seed 2
+crosswords --langue en --fleches --size 11x13 --niveau 4 --auto-defs --svg grid.svg --svg-solution solution.svg
+```
+
+```
+  U N C H A I N S
+  T O O ■ K N O T
+  E ■ S A I L O R
+  N A T ■ T A K E
+  S U L T A N ■ P
+  I D E A ■ D O ■
+  L I S T S ■ P A
+  S O S ■ O P T S
+
+Across
+     1. UNCHAINS
+     8. TOO
+     9. KNOT
+    10. SAILOR
+    11. NAT
+    13. TAKE
+    14. SULTAN
+    16. IDEA
+    17. DO
+    19. LISTS
+    21. PA
+    23. SOS
+    24. OPTS
+Down
+     1. UTENSILS
+     2. NO
+     3. COSTLESS
+     4. AKITA
+     5. INLAND
+     6. NOOK
+     7. STREP
+    12. AUDIO
+    15. TAT
+    18. OPT
+    20. SO
+    22. AS
+```
+
+Ce qui change avec la langue :
+
+- **Dictionnaire** : 70 000 mots anglais au seuil par défaut (voir [Dictionnaire](#dictionnaire)).
+- **Présentation des mots croisés** : à l'anglo-saxonne, cases numérotées dans l'ordre de lecture et listes « Across » et « Down », en texte comme en SVG. Les grilles gardent leurs règles (pas de symétrie imposée, mots de 2 lettres admis).
+- **Définitions** : lues dans `definitions-en.txt` du dossier de cache (plus `--defs`), et rédigées en anglais par `--auto-defs`, en orthographe américaine comme le dictionnaire. Au niveau 4, les définitions à double sens se terminent par un point d'interrogation, comme dans les grilles américaines : BANGS « Fringe group? », PENNE « Quills you can eat? ».
+- **Mots fléchés à numéros** : la liste sous la grille s'intitule « Clues ».
+- **Export JSON** : `"langue": "en"`.
+
+Les messages de l'outil restent en français.
+
 ## Export JSON
 
 `--json FICHIER` écrit la grille, ses mots et ses définitions en JSON ; `--json -` l'écrit sur la sortie standard à la place du rendu texte.
@@ -165,6 +224,13 @@ Sans `--dict`, CrossWords utilise une liste française téléchargée au premier
 - [Lexique](http://www.lexique.org) 3.83 (CC BY-SA 4.0) : fréquences d'usage dans les films et les livres, qui servent à noter les mots.
 
 Le score d'un mot croît avec le logarithme de sa fréquence : 0 pour un mot absent de Lexique, 12 vers 0,1 occurrence par million de mots, 21 vers une par million, 41 vers cent par million. `--min-score` écarte les mots de score inférieur : 12 par défaut pour les mots croisés (66 500 mots), selon le niveau pour les mots fléchés, 0 pour garder toutes les formes (319 000 après normalisation). Les mots de meilleur score sont aussi favorisés au tirage.
+
+En anglais (`--langue en`), la liste fusionne de même :
+
+- [an-array-of-english-words](https://github.com/words/an-array-of-english-words) (MIT) : 275 000 mots, qui fixent les mots admis ;
+- la [liste collaborative](https://github.com/Crossword-Nexus/collaborative-word-list) de Crossword Nexus (MIT) : 568 000 entrées notées de 0 à 100 par des auteurs de mots croisés, qui servent à noter les mots.
+
+Les notes sont ramenées sur l'échelle des scores français (90 vers 22, 80 vers 17, 50 vers 12), pour que seuils et niveaux s'appliquent tels quels : 29 000 mots au niveau 1, 45 000 au niveau 2, 70 000 aux niveaux 3 et 4 et pour les mots croisés. Sous 50, la liste note surtout des mots de remplissage (MERSE, LERE), écartés à tous les niveaux. Les mots de 2 lettres, absents des grilles anglo-saxonnes et tous notés bas, sont traités à part : les plus courants (AN, OF, TO, WE…) dès le niveau 1, une quinzaine d'autres (AD, AX, OX, PI…) dès le niveau 2.
 
 On peut fournir sa propre liste avec `--dict` : un mot par ligne, avec un score entier optionnel après une tabulation (ou espace, `;`, `,`). Les accents et ligatures sont retirés à la lecture (`cœur` devient `COEUR`), les mots contenant un tiret, une apostrophe ou un chiffre sont ignorés, les doublons fusionnés. Aucun seuil n'est alors appliqué par défaut.
 
@@ -197,9 +263,10 @@ Points d'entrée :
 | `random_pattern`, `random_fleches_pattern` | Gabarits seuls. |
 | `Grid::to_svg`, `Fleches::to_svg`, `Fleches::to_svg_numbered` | Rendus SVG. |
 | `Solution::to_json`, `Fleches::to_json` | Export JSON. |
+| `Language`, et les variantes `_in` (`Solution::word_list_in`, `Grid::to_svg_in`, `Fleches::to_json_in`…) | Choix de la langue (français par défaut). |
 | `level_settings`, `FlechesOptions::with_level` | Réglages des niveaux de difficulté. |
-| `wordlist::french` | Liste de mots par défaut, téléchargée et mise en cache. |
-| `autodefs::generate` | Rédaction des définitions par l'API Claude. |
+| `wordlist::french`, `wordlist::english` | Listes de mots par défaut, téléchargées et mises en cache. |
+| `autodefs::generate`, `autodefs::generate_for` | Rédaction des définitions par l'API Claude, en français ou dans la langue choisie. |
 
 ## Comment ça marche
 
@@ -225,8 +292,12 @@ Mesurées sur un cœur, graines 1 à 5, chargement du dictionnaire compris (envi
 | Mots croisés 13x13 | 12 % | 0 | toujours | 1 à 14 s |
 | Mots croisés 15x15 | 13 % | 0 | toujours | 12 à 28 s |
 | Mots fléchés 9x11 à 15x17 | selon le niveau | selon le niveau | toujours | < 2,5 s |
+| Mots croisés anglais 8x8 à 15x15 | défaut | 12 | toujours | < 0,2 s |
+| Mots croisés anglais 13x13 | 14 % | 12 | toujours | 4 à 22 s |
+| Mots fléchés anglais 11x13, niveaux 2 à 4 | selon le niveau | selon le niveau | toujours | < 3,5 s |
+| Mots fléchés anglais 11x13 et 15x17, niveau 1 | selon le niveau | 22 | toujours | 1 à 28 s |
 
-Pour les grilles très denses, baisser le seuil (plus de mots) ou la longueur maximale des mots (`--max-len`) aide beaucoup.
+Le niveau 1 anglais est plus lent : il ne dispose que de 25 mots de 2 lettres. Pour les grilles très denses, baisser le seuil (plus de mots) ou la longueur maximale des mots (`--max-len`) aide beaucoup.
 
 ## Tests
 
@@ -234,7 +305,7 @@ Pour les grilles très denses, baisser le seuil (plus de mots) ou la longueur ma
 cargo test
 ```
 
-41 tests unitaires et un doctest. Les grilles produites ont aussi été vérifiées par des scripts indépendants : tous les mots appartiennent au dictionnaire, aucun doublon, aucune case orpheline, chaque mot fléché a sa case définition, et chaque export JSON respecte le schéma et les garanties de sa documentation.
+45 tests unitaires et un doctest. Les grilles produites ont aussi été vérifiées par des scripts indépendants : tous les mots appartiennent au dictionnaire, aucun doublon, aucune case orpheline, chaque mot fléché a sa case définition, et chaque export JSON respecte le schéma et les garanties de sa documentation.
 
 ## Publier une version
 
@@ -242,4 +313,4 @@ Mettre à jour `version` dans `Cargo.toml` et le [journal des modifications](CHA
 
 ## Licence
 
-CrossWords est distribué sous licence [Apache 2.0](LICENSE) : vous pouvez le réutiliser, le modifier et le redistribuer, à condition de citer l'auteur original en conservant le fichier [NOTICE](NOTICE). Les listes de mots, téléchargées à l'exécution, ont leurs propres licences (MIT pour an-array-of-french-words, CC BY-SA 4.0 pour Lexique).
+CrossWords est distribué sous licence [Apache 2.0](LICENSE) : vous pouvez le réutiliser, le modifier et le redistribuer, à condition de citer l'auteur original en conservant le fichier [NOTICE](NOTICE). Les listes de mots, téléchargées à l'exécution, ont leurs propres licences : MIT pour an-array-of-french-words, an-array-of-english-words et la liste collaborative de Crossword Nexus, CC BY-SA 4.0 pour Lexique.

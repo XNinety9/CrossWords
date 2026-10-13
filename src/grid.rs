@@ -1,5 +1,6 @@
 //! Grille, emplacements de mots et rendus (texte, liste de mots, SVG).
 
+use crate::Language;
 use crate::dict::{Letter, letter_char, normalize};
 use std::fmt::{self, Write as _};
 
@@ -245,6 +246,99 @@ impl Grid {
             .collect()
     }
 
+    /// Numérotation à l'anglo-saxonne : chaque case blanche qui commence un
+    /// mot horizontal ou vertical reçoit un numéro, en ordre de lecture.
+    /// Renvoie un numéro (ou `None`) par case, indexée `row * width + col`.
+    pub fn numbers(&self) -> Vec<Option<usize>> {
+        let (w, h) = (self.width, self.height);
+        let white = |r: usize, c: usize| !self.cells[r * w + c].is_block();
+        let mut out = vec![None; self.cells.len()];
+        let mut n = 0;
+        for r in 0..h {
+            for c in 0..w {
+                if !white(r, c) {
+                    continue;
+                }
+                let across = (c == 0 || !white(r, c - 1)) && c + 1 < w && white(r, c + 1);
+                let down = (r == 0 || !white(r - 1, c)) && r + 1 < h && white(r + 1, c);
+                if across || down {
+                    n += 1;
+                    out[r * w + c] = Some(n);
+                }
+            }
+        }
+        out
+    }
+
+    /// Rendu SVG dans la langue voulue : à la française (rangées en chiffres
+    /// romains, colonnes en chiffres arabes) ou à l'anglo-saxonne (cases
+    /// numérotées).
+    pub fn to_svg_in(&self, with_letters: bool, lang: Language) -> String {
+        match lang {
+            Language::Fr => self.to_svg(with_letters),
+            Language::En => self.to_svg_numbered(with_letters),
+        }
+    }
+
+    /// Rendu SVG à l'anglo-saxonne : numéro dans le coin des cases qui
+    /// commencent un mot, sans en-têtes de rangées ni de colonnes.
+    pub fn to_svg_numbered(&self, with_letters: bool) -> String {
+        const C: usize = 40;
+        const P: usize = 4;
+        let (w, h) = (P * 2 + self.width * C, P * 2 + self.height * C);
+        let numbers = self.numbers();
+        let mut s = String::new();
+        let _ = write!(
+            s,
+            r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="{w}" height="{h}" font-family="Helvetica, Arial, sans-serif">"#
+        );
+        s.push_str(r#"<rect width="100%" height="100%" fill="white"/>"#);
+        for r in 0..self.height {
+            for c in 0..self.width {
+                let (x, y) = (P + c * C, P + r * C);
+                match self.get(r, c) {
+                    Cell::Block => {
+                        let _ = write!(
+                            s,
+                            r#"<rect x="{x}" y="{y}" width="{C}" height="{C}" fill="black"/>"#
+                        );
+                    }
+                    Cell::Open(l) => {
+                        let _ = write!(
+                            s,
+                            r#"<rect x="{x}" y="{y}" width="{C}" height="{C}" fill="white" stroke="black" stroke-width="1"/>"#
+                        );
+                        if let Some(n) = numbers[r * self.width + c] {
+                            let _ = write!(
+                                s,
+                                r#"<text x="{}" y="{}" font-size="10">{n}</text>"#,
+                                x + 3,
+                                y + 11
+                            );
+                        }
+                        if let (true, Some(l)) = (with_letters, l) {
+                            let _ = write!(
+                                s,
+                                r#"<text x="{}" y="{}" font-size="22" text-anchor="middle">{}</text>"#,
+                                x + C / 2,
+                                y + C / 2 + 10,
+                                letter_char(l)
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        let _ = write!(
+            s,
+            r#"<rect x="{P}" y="{P}" width="{}" height="{}" fill="none" stroke="black" stroke-width="3"/>"#,
+            self.width * C,
+            self.height * C
+        );
+        s.push_str("</svg>\n");
+        s
+    }
+
     /// Rendu SVG imprimable. Avec `with_letters = false`, on obtient la grille
     /// vierge à remplir ; avec `true`, la solution.
     pub fn to_svg(&self, with_letters: bool) -> String {
@@ -395,6 +489,49 @@ impl Solution {
         self.entries.iter().filter(|e| !e.across)
     }
 
+    /// Liste des mots dans la langue voulue : à la française (voir
+    /// [`Solution::word_list`]) ou à l'anglo-saxonne, « Across » puis « Down »,
+    /// chaque mot précédé du numéro de sa première case.
+    pub fn word_list_in(&self, lang: Language) -> String {
+        if lang == Language::Fr {
+            return self.word_list();
+        }
+        let numbers = self.grid.numbers();
+        let num = |e: &Entry| numbers[e.row * self.grid.width() + e.col].unwrap_or(0);
+        let mut s = String::from("Across\n");
+        for e in self.across() {
+            let _ = writeln!(s, "  {:>4}. {}", num(e), e.word);
+        }
+        s.push_str("Down\n");
+        let mut down: Vec<&Entry> = self.down().collect();
+        down.sort_by_key(|e| num(e));
+        for e in down {
+            let _ = writeln!(s, "  {:>4}. {}", num(e), e.word);
+        }
+        s
+    }
+
+    /// Grille en texte dans la langue voulue : avec en-têtes à la française
+    /// (comme `Display`), ou nue à l'anglo-saxonne.
+    pub fn grid_text_in(&self, lang: Language) -> String {
+        if lang == Language::Fr {
+            return self.to_string();
+        }
+        let g = &self.grid;
+        let mut s = String::new();
+        for r in 0..g.height() {
+            let row: Vec<String> = (0..g.width())
+                .map(|c| match g.get(r, c) {
+                    Cell::Block => "■".to_string(),
+                    Cell::Open(None) => ".".to_string(),
+                    Cell::Open(Some(l)) => letter_char(l).to_string(),
+                })
+                .collect();
+            let _ = writeln!(s, "  {}", row.join(" "));
+        }
+        s
+    }
+
     /// Liste des mots à la française : « Horizontalement » par rangée en
     /// chiffres romains, « Verticalement » par colonne en chiffres arabes,
     /// les mots d'une même ligne séparés par des tirets.
@@ -482,6 +619,29 @@ pub fn roman(mut n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn english_numbering_and_lists() {
+        // A B #      1 2 .
+        // C D E  ->  3 . 4
+        // # F G      . 5 .
+        let g = Grid::parse("AB#\nCDE\n#FG").unwrap();
+        let n: Vec<usize> = g.numbers().iter().map(|x| x.unwrap_or(0)).collect();
+        assert_eq!(n, vec![1, 2, 0, 3, 0, 4, 0, 5, 0]);
+        let sol = Solution::from_grid(g);
+        assert_eq!(
+            sol.word_list_in(Language::En),
+            "Across\n     1. AB\n     3. CDE\n     5. FG\nDown\n     1. AC\n     2. BDF\n     4. EG\n"
+        );
+        assert_eq!(sol.word_list_in(Language::Fr), sol.word_list());
+        assert_eq!(
+            sol.grid_text_in(Language::En),
+            "  A B ■\n  C D E\n  ■ F G\n"
+        );
+        let svg = sol.grid.to_svg_in(false, Language::En);
+        assert!(svg.contains(">5</text>") && !svg.contains(">A</text>"));
+        assert!(sol.grid.to_svg_in(true, Language::En).contains(">A</text>"));
+    }
 
     #[test]
     fn roman_numerals() {

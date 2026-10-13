@@ -1,23 +1,39 @@
-//! Liste de mots française téléchargée à la demande et mise en cache.
+//! Listes de mots téléchargées à la demande et mises en cache, une par
+//! langue. Chacune fusionne deux sources, figées par version et vérifiées
+//! par empreinte SHA-256 : une liste de formes qui fixe les mots admis, et
+//! une source de notes qui ne fait que les noter.
 //!
-//! Deux sources, figées par version et vérifiées par empreinte SHA-256 :
+//! Français :
 //!
 //! - [an-array-of-french-words] 2.0.0 (MIT) : 336 000 formes, flexions
 //!   comprises ;
 //! - [Lexique] 3.83 (CC BY-SA 4.0) : fréquences d'usage (films et livres).
+//!   Ses mots absents de la liste de formes sont surtout des scories de
+//!   sous-titres (« dano », « ok », « to ») et sont écartés. Le score croît
+//!   avec le logarithme de la fréquence (0 pour un mot absent de Lexique, 21
+//!   pour un mot vu une fois par million, 41 pour cent fois par million).
 //!
-//! Elles sont fusionnées en un fichier `mot<TAB>score` : la liste de formes
-//! fixe les mots admis, Lexique ne fait que les noter (ses mots absents de la
-//! liste sont surtout des scories de sous-titres : « dano », « ok », « to »).
-//! Le score croît avec le logarithme de la fréquence (0 pour un mot absent
-//! de Lexique, 21 pour un mot vu une fois par million, 41 pour cent fois par
-//! million). Le
-//! téléchargement passe par la commande `curl`, présente sur Linux, macOS et
-//! Windows 10 et plus.
+//! Anglais :
+//!
+//! - [an-array-of-english-words] (MIT) : 275 000 mots ;
+//! - la [liste collaborative] de Crossword Nexus (MIT) : notes de 0 à 100
+//!   attribuées par des auteurs de mots croisés. Elles sont ramenées sur
+//!   l'échelle des scores français (90 vers 22, 80 vers 17, 50 vers 12 ; 0
+//!   pour un mot non noté), pour que seuils et niveaux de difficulté
+//!   s'appliquent tels quels. Sous 50, la liste note surtout des mots de
+//!   remplissage, écartés à tous les niveaux. Les mots de 2 lettres, que les
+//!   grilles anglo-saxonnes n'emploient pas et que la liste note tous bas,
+//!   sont notés à part : les plus courants (AN, OF, TO...) dès le niveau 1.
+//!
+//! Le téléchargement passe par la commande `curl`, présente sur Linux, macOS
+//! et Windows 10 et plus.
 //!
 //! [an-array-of-french-words]: https://github.com/words/an-array-of-french-words
 //! [Lexique]: http://www.lexique.org
+//! [an-array-of-english-words]: https://github.com/words/an-array-of-english-words
+//! [liste collaborative]: https://github.com/Crossword-Nexus/collaborative-word-list
 
+use crate::Language;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::fs;
@@ -40,9 +56,24 @@ const LEXIQUE: Source = Source {
     sha256: "637ba37a767a66679c48371d673ece50cbf541b49a4e40e598963d4f3fbce52b",
 };
 
-/// Nom du fichier fusionné ; à changer si le format ou le calcul des scores
-/// évolue, pour forcer la régénération.
-const MERGED: &str = "fr-v2.txt";
+const EN_WORDS: Source = Source {
+    url: "https://raw.githubusercontent.com/words/an-array-of-english-words/b96df7dc26aeb6366c7adad42cb98e6933bddd89/index.json",
+    sha256: "dadb53f5df46b5b26577fe1cadc85bf076d2d04cf554f6fcda693f2704555e06",
+};
+
+const XWORDLIST: Source = Source {
+    url: "https://raw.githubusercontent.com/Crossword-Nexus/collaborative-word-list/b51b2ad6876c1dc3f9df212e1ed8535fc9e4770a/xwordlist.dict",
+    sha256: "a945a839a5f1e6f48caf9c8de446e5cd85f3567d7f62afcf54c6b738e8906ff4",
+};
+
+/// Nom du fichier fusionné d'une langue ; à changer si le format ou le
+/// calcul des scores évolue, pour forcer la régénération.
+fn merged_name(lang: Language) -> &'static str {
+    match lang {
+        Language::Fr => "fr-v2.txt",
+        Language::En => "en-v1.txt",
+    }
+}
 
 /// Dossier de cache : `$CROSSWORDS_CACHE`, sinon `$XDG_CACHE_HOME/crosswords`,
 /// sinon `~/.cache/crosswords` (`%LOCALAPPDATA%\crosswords` sous Windows).
@@ -60,24 +91,49 @@ pub fn cache_dir() -> Option<PathBuf> {
 
 /// Chemin de la liste française prête à l'emploi, téléchargée et construite
 /// au premier appel. `log` reçoit les messages de progression.
-pub fn french(mut log: impl FnMut(&str)) -> io::Result<PathBuf> {
+pub fn french(log: impl FnMut(&str)) -> io::Result<PathBuf> {
+    for_language(Language::Fr, log)
+}
+
+/// Chemin de la liste anglaise prête à l'emploi (voir [`french`]).
+pub fn english(log: impl FnMut(&str)) -> io::Result<PathBuf> {
+    for_language(Language::En, log)
+}
+
+/// Chemin de la liste d'une langue, téléchargée et construite au premier
+/// appel.
+pub fn for_language(lang: Language, mut log: impl FnMut(&str)) -> io::Result<PathBuf> {
     let dir = cache_dir().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::NotFound,
             "aucun dossier de cache (définir CROSSWORDS_CACHE)",
         )
     })?;
-    let merged = dir.join(MERGED);
+    let name = merged_name(lang);
+    let merged = dir.join(name);
     if merged.is_file() {
         return Ok(merged);
     }
     fs::create_dir_all(&dir)?;
-    log("Première utilisation : téléchargement de la liste de mots (une seule fois)");
-    let words = fetch(&WORDS, &dir, &mut log)?;
-    let lexique = fetch(&LEXIQUE, &dir, &mut log)?;
-    log("Construction du dictionnaire");
-    let text = merge(&words, &lexique)?;
-    let tmp = dir.join(format!("{MERGED}.{}.part", std::process::id()));
+    log(&format!(
+        "Première utilisation : téléchargement de la liste de mots ({}, une seule fois)",
+        lang.code()
+    ));
+    let text = match lang {
+        Language::Fr => {
+            let words = fetch(&WORDS, &dir, &mut log)?;
+            let lexique = fetch(&LEXIQUE, &dir, &mut log)?;
+            log("Construction du dictionnaire");
+            merge(&words, &lexique)?
+        }
+        Language::En => {
+            let words = fetch(&EN_WORDS, &dir, &mut log)?;
+            let scores = fetch(&XWORDLIST, &dir, &mut log)?;
+            log("Construction du dictionnaire");
+            merge_english(&words, &scores)?
+        }
+    };
+    let tmp = dir.join(format!("{name}.{}.part", std::process::id()));
     fs::write(&tmp, text)?;
     fs::rename(&tmp, &merged)?;
     log(&format!(
@@ -161,6 +217,77 @@ fn merge(words_json: &str, lexique_tsv: &str) -> io::Result<String> {
         let _ = writeln!(out, "{w}\t{}", score(*f));
     }
     Ok(out)
+}
+
+/// Fusionne la liste de mots anglais (tableau JSON) et les notes de la liste
+/// collaborative (`MOT;note`).
+fn merge_english(words_json: &str, xwordlist: &str) -> io::Result<String> {
+    let bad = |m: &str| io::Error::new(io::ErrorKind::InvalidData, m.to_string());
+    let mut notes: BTreeMap<String, u32> = BTreeMap::new();
+    for w in parse_json_strings(words_json).ok_or_else(|| bad("index.json illisible"))? {
+        notes.entry(w.to_uppercase()).or_insert(0);
+    }
+    for line in xwordlist.lines() {
+        let Some((w, n)) = line.trim().rsplit_once(';') else {
+            continue;
+        };
+        if let (Some(e), Ok(n)) = (notes.get_mut(w), n.trim().parse::<u32>()) {
+            let score = if w.len() == 2 {
+                two_letter_score(w)
+            } else {
+                english_score(n)
+            };
+            *e = (*e).max(score);
+        }
+    }
+    let mut out = String::from(
+        "# Généré par CrossWords : an-array-of-english-words (MIT), \
+         notes de la liste collaborative Crossword Nexus (MIT)\n",
+    );
+    for (w, s) in &notes {
+        let _ = writeln!(out, "{}\t{s}", w.to_lowercase());
+    }
+    Ok(out)
+}
+
+/// Mots de 2 lettres courants, admis au niveau 1 : la liste collaborative
+/// note tous les mots de 2 lettres bas (40 à 46), les grilles
+/// anglo-saxonnes n'en employant pas, sans distinguer AN ou TO de UM ou EE.
+const TWO_LETTERS_COMMON: &[&str] = &[
+    "AN", "AS", "AT", "BE", "BY", "DO", "GO", "HE", "HI", "IF", "IN", "IS", "IT", "ME", "MY", "NO",
+    "OF", "OH", "ON", "OR", "SO", "TO", "UP", "US", "WE",
+];
+
+/// Mots de 2 lettres admis à partir du niveau 2.
+const TWO_LETTERS_FAMILIAR: &[&str] = &[
+    "AD", "AH", "AM", "AX", "EH", "HA", "LA", "LO", "MA", "OW", "OX", "PA", "PI", "YE",
+];
+
+/// Score anglais d'un mot de 2 lettres (voir les listes ci-dessus) ; les
+/// autres (EE, FE, UM...) ne servent qu'avec `--min-score 0`.
+fn two_letter_score(w: &str) -> u32 {
+    if TWO_LETTERS_COMMON.contains(&w) {
+        22
+    } else if TWO_LETTERS_FAMILIAR.contains(&w) {
+        17
+    } else {
+        1
+    }
+}
+
+/// Note de la liste collaborative (0 à 100) ramenée sur l'échelle des scores
+/// français, par morceaux, pour que les seuils des niveaux donnent des
+/// dictionnaires de taille comparable.
+fn english_score(n: u32) -> u32 {
+    match n {
+        90.. => 22 + (n - 90) / 2,
+        80..=89 => 17 + (n - 80) / 2,
+        50..=79 => 12 + (n - 50) / 6,
+        // Les notes 40 à 49 sont surtout des mots de remplissage (MERSE,
+        // LERE, DAE) : sous le seuil du niveau 4.
+        40..=49 => 4 + (n - 40) / 3,
+        _ => 1 + n * 3 / 40,
+    }
 }
 
 /// Score d'un mot de fréquence `f` (occurrences par million) ; négatif
@@ -286,6 +413,27 @@ mod tests {
         assert_eq!(v, vec!["a", "bé", "\"q\"", "😀"]);
         assert_eq!(parse_json_strings("[]").unwrap(), Vec::<String>::new());
         assert!(parse_json_strings("{}").is_none());
+    }
+
+    #[test]
+    fn merge_english_scores() {
+        let json = r#"["cat", "zebu", "aa"]"#;
+        let xw = "CAT;90\nZEBU;45\nICECREAM;90\nAA;0\n";
+        let out = merge_english(json, xw).unwrap();
+        let lines: Vec<&str> = out.lines().skip(1).collect();
+        // ICECREAM, absent du dictionnaire, n'est pas admis.
+        assert_eq!(lines, vec!["aa\t1", "cat\t22", "zebu\t5"]);
+    }
+
+    #[test]
+    fn english_scale_is_monotonic() {
+        let s: Vec<u32> = (0..=100).map(english_score).collect();
+        assert!(s.windows(2).all(|w| w[0] <= w[1]));
+        assert_eq!((english_score(90), english_score(80)), (22, 17));
+        assert_eq!((english_score(50), english_score(40)), (12, 4));
+        assert_eq!(two_letter_score("TO"), 22);
+        assert_eq!(two_letter_score("OX"), 17);
+        assert_eq!(two_letter_score("UM"), 1);
     }
 
     #[test]

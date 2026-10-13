@@ -5,7 +5,7 @@ CrossWords exporte ses grilles, mots croisés comme mots fléchés, dans un form
 - Option : `--json FICHIER`, ou `--json -` pour l'écrire sur la sortie standard à la place du rendu texte (les messages de progression restent sur la sortie d'erreur).
 - Bibliothèque : `Solution::to_json` (mots croisés) et `Fleches::to_json` (mots fléchés).
 - Schéma : [`crosswords.schema.json`](crosswords.schema.json) (JSON Schema 2020-12).
-- Version du format : 1 (constante `JSON_FORMAT_VERSION`).
+- Version du format : 2 (constante `JSON_FORMAT_VERSION`), depuis CrossWords 1.1 ; voir [Évolution](#évolution).
 
 ```sh
 crosswords --fleches --size 11x13 --niveau 3 --auto-defs --json grille.json
@@ -19,8 +19,9 @@ Une grille de mots fléchés 6x6 de niveau 1 (`--fleches --size 6x6 --niveau 1 -
 ```json
 {
   "format": "crosswords",
-  "version": 1,
+  "version": 2,
   "type": "fleches",
+  "langue": "fr",
   "largeur": 6,
   "hauteur": 6,
   "graine": 2,
@@ -34,17 +35,17 @@ Une grille de mots fléchés 6x6 de niveau 1 (`--fleches --size 6x6 --niveau 1 -
     "REELLE"
   ],
   "mots": [
-    {"id": 0, "mot": "PAGE", "sens": "horizontal", "ligne": 1, "colonne": 0, "longueur": 4},
-    {"id": 1, "mot": "NON", "sens": "horizontal", "ligne": 2, "colonne": 3, "longueur": 3},
-    {"id": 2, "mot": "PAPIER", "sens": "horizontal", "ligne": 3, "colonne": 0, "longueur": 6},
-    {"id": 3, "mot": "CRAIE", "sens": "horizontal", "ligne": 4, "colonne": 1, "longueur": 5},
-    {"id": 4, "mot": "REELLE", "sens": "horizontal", "ligne": 5, "colonne": 0, "longueur": 6},
-    {"id": 5, "mot": "CA", "sens": "vertical", "ligne": 0, "colonne": 1, "longueur": 2},
-    {"id": 6, "mot": "ACE", "sens": "vertical", "ligne": 3, "colonne": 1, "longueur": 3},
-    {"id": 7, "mot": "PRE", "sens": "vertical", "ligne": 3, "colonne": 2, "longueur": 3},
-    {"id": 8, "mot": "GENIAL", "sens": "vertical", "ligne": 0, "colonne": 3, "longueur": 6},
-    {"id": 9, "mot": "OEIL", "sens": "vertical", "ligne": 2, "colonne": 4, "longueur": 4},
-    {"id": 10, "mot": "DENREE", "sens": "vertical", "ligne": 0, "colonne": 5, "longueur": 6}
+    {"id": 0, "numero": null, "mot": "PAGE", "sens": "horizontal", "ligne": 1, "colonne": 0, "longueur": 4},
+    {"id": 1, "numero": null, "mot": "NON", "sens": "horizontal", "ligne": 2, "colonne": 3, "longueur": 3},
+    {"id": 2, "numero": null, "mot": "PAPIER", "sens": "horizontal", "ligne": 3, "colonne": 0, "longueur": 6},
+    {"id": 3, "numero": null, "mot": "CRAIE", "sens": "horizontal", "ligne": 4, "colonne": 1, "longueur": 5},
+    {"id": 4, "numero": null, "mot": "REELLE", "sens": "horizontal", "ligne": 5, "colonne": 0, "longueur": 6},
+    {"id": 5, "numero": null, "mot": "CA", "sens": "vertical", "ligne": 0, "colonne": 1, "longueur": 2},
+    {"id": 6, "numero": null, "mot": "ACE", "sens": "vertical", "ligne": 3, "colonne": 1, "longueur": 3},
+    {"id": 7, "numero": null, "mot": "PRE", "sens": "vertical", "ligne": 3, "colonne": 2, "longueur": 3},
+    {"id": 8, "numero": null, "mot": "GENIAL", "sens": "vertical", "ligne": 0, "colonne": 3, "longueur": 6},
+    {"id": 9, "numero": null, "mot": "OEIL", "sens": "vertical", "ligne": 2, "colonne": 4, "longueur": 4},
+    {"id": 10, "numero": null, "mot": "DENREE", "sens": "vertical", "ligne": 0, "colonne": 5, "longueur": 6}
   ],
   "definitions": [
     {"numero": 1, "ligne": 0, "colonne": 0, "fleche": "droite-bas", "mot": 5, "texte": "Cela, à l'oral"},
@@ -62,7 +63,7 @@ Une grille de mots fléchés 6x6 de niveau 1 (`--fleches --size 6x6 --niveau 1 -
 }
 ```
 
-Une grille de mots croisés a la même forme, avec `"type": "croises"`, `"niveau": null` et `"definitions": []`.
+Une grille de mots croisés a la même forme, avec `"type": "croises"`, `"niveau": null`, `"definitions": []` et le `numero` de chaque mot renseigné. En anglais (`--langue en`), `"langue": "en"`.
 
 ## Conventions
 
@@ -77,8 +78,9 @@ Une grille de mots croisés a la même forme, avec `"type": "croises"`, `"niveau
 | Champ | Type | Description |
 |---|---|---|
 | `format` | chaîne | Toujours `"crosswords"`. |
-| `version` | entier | Version du format, `1`. Elle change à toute modification incompatible. |
+| `version` | entier | Version du format, `2`. Elle change à toute modification du format. |
 | `type` | chaîne | `"croises"` (mots croisés) ou `"fleches"` (mots fléchés). |
+| `langue` | chaîne | Langue des mots et des définitions : `"fr"` ou `"en"`. |
 | `largeur`, `hauteur` | entier | Dimensions de la grille, en cases. |
 | `graine` | entier ou `null` | Graine qui a produit la grille : même graine, même dictionnaire et mêmes options donnent la même grille. |
 | `niveau` | entier ou `null` | Niveau de difficulté des mots fléchés, de 1 (facile) à 4 (très difficile) ; `null` pour les mots croisés. |
@@ -105,12 +107,13 @@ Un mot par emplacement : toute suite maximale d'au moins deux cases blanches, ho
 | Champ | Type | Description |
 |---|---|---|
 | `id` | entier | Position du mot dans le tableau, de 0 à n-1 ; c'est la valeur que reprend `definitions[].mot`. |
+| `numero` | entier ou `null` | Mots croisés : numéro de la première case du mot dans la numérotation anglo-saxonne (chaque case qui commence un mot horizontal ou vertical est numérotée, en ordre de lecture ; un mot horizontal et un mot vertical peuvent partager un numéro). `null` pour les mots fléchés, dont les définitions sont numérotées à part. |
 | `mot` | chaîne | Le mot, lu dans la grille. |
 | `sens` | chaîne | `"horizontal"` (de gauche à droite) ou `"vertical"` (de haut en bas). |
 | `ligne`, `colonne` | entier | Case de la première lettre. |
 | `longueur` | entier | Nombre de lettres. |
 
-Pour les mots croisés, les définitions « à la française » se regroupent par ligne (« Horizontalement », rangées en chiffres romains) et par colonne (« Verticalement », colonnes en chiffres arabes) : tous les mots horizontaux de même `ligne`, puis tous les verticaux de même `colonne`.
+Pour les mots croisés en anglais, les définitions se présentent en deux listes, « Across » (mots horizontaux) et « Down » (mots verticaux), chacune triée par `numero`. En français, elles se regroupent par ligne (« Horizontalement », rangées en chiffres romains) et par colonne (« Verticalement », colonnes en chiffres arabes) : tous les mots horizontaux de même `ligne`, puis tous les verticaux de même `colonne`.
 
 ### `definitions` (mots fléchés)
 
@@ -149,4 +152,9 @@ Pour un fichier produit par CrossWords :
 
 ## Évolution
 
-Toute modification du format, même l'ajout d'un champ ou d'une valeur, change `version`. Un programme qui lit ce format doit refuser une `version` qu'il ne connaît pas ; le schéma JSON correspond à la version 1.
+Toute modification du format, même l'ajout d'un champ ou d'une valeur, change `version`. Un programme qui lit ce format doit refuser une `version` qu'il ne connaît pas ; le schéma JSON correspond à la version courante.
+
+| Version | CrossWords | Changements |
+|---|---|---|
+| 2 | 1.1 | Champ `langue` ; champ `numero` des mots. |
+| 1 | 1.0 | Première version. |

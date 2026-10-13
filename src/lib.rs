@@ -59,6 +59,36 @@ pub use rng::Rng;
 use solver::{Outcome, Solver};
 use std::fmt;
 
+/// Langue des grilles : liste de mots, définitions et présentation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum Language {
+    /// Français : mots croisés « à la française » (rangées en chiffres
+    /// romains, colonnes en chiffres arabes).
+    #[default]
+    Fr,
+    /// Anglais : cases numérotées, définitions « Across » et « Down ».
+    En,
+}
+
+impl Language {
+    /// Code ISO 639-1 : `fr` ou `en`.
+    pub fn code(self) -> &'static str {
+        match self {
+            Language::Fr => "fr",
+            Language::En => "en",
+        }
+    }
+
+    /// Lit un code (`fr`, `en`) ou un nom (`français`, `anglais`, `english`...).
+    pub fn from_code(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "fr" | "francais" | "français" | "french" => Some(Language::Fr),
+            "en" | "anglais" | "english" => Some(Language::En),
+            _ => None,
+        }
+    }
+}
+
 /// Erreurs de remplissage ou de génération.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {

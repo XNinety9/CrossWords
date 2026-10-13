@@ -1,6 +1,7 @@
 use crosswords::{
     Definitions, Dictionary, FillOptions, Fleches, FlechesOptions, GenerateOptions, Grid, LEVELS,
-    Solution, autodefs, fill, fill_fleches, generate, generate_fleches, level_settings, wordlist,
+    Language, Solution, autodefs, fill, fill_fleches, generate, generate_fleches, level_settings,
+    wordlist,
 };
 use std::fs::{File, OpenOptions};
 use std::io::{BufReader, Write as _};
@@ -19,15 +20,19 @@ USAGE
 ENTRÉES
   --dict FICHIER       Dictionnaire : un mot par ligne, score optionnel après
                        une tabulation (les accents sont retirés à la lecture).
-                       Par défaut, une liste française avec fréquences est
+                       Par défaut, une liste notée de la langue choisie est
                        téléchargée au premier lancement puis mise en cache
   --size LxH           Taille de la grille à générer (défaut : 10x10)
   --template FICHIER   Gabarit à remplir (# noire ou case définition,
                        . vide, lettre imposée)
   --fleches            Mots fléchés au lieu de mots croisés
+  --langue fr|en       Langue de la grille (défaut : fr) : liste de mots,
+                       définitions et présentation (en anglais, cases
+                       numérotées et listes Across/Down)
   --defs FICHIER       Définitions pour les mots fléchés : MOT<TAB>définition.
-                       Elles priment sur le cache de définitions
-                       (definitions.txt du dossier de cache), toujours lu
+                       Elles priment sur le cache de définitions du dossier
+                       de cache (definitions.txt, ou definitions-en.txt en
+                       anglais), toujours lu
   --auto-defs          Mots fléchés : fait rédiger les définitions absentes
                        (Claude Haiku 5.5 aux niveaux 1 et 2, Opus 5.5 aux
                        niveaux 3 et 4 ; clé ANTHROPIC_API_KEY) et les
@@ -86,6 +91,7 @@ struct Args {
     auto_defs: bool,
     numbered: bool,
     level: Option<u8>,
+    lang: Language,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -109,6 +115,7 @@ fn parse_args() -> Result<Args, String> {
         auto_defs: false,
         numbered: false,
         level: None,
+        lang: Language::Fr,
     };
     let mut it = std::env::args().skip(1);
     fn val<T: std::str::FromStr>(
@@ -154,6 +161,11 @@ fn parse_args() -> Result<Args, String> {
             "--missing" => a.missing = true,
             "--auto-defs" => a.auto_defs = true,
             "--numeros" | "--numéros" => a.numbered = true,
+            "--langue" | "--lang" | "--language" => {
+                let v: String = val(&mut it, &arg)?;
+                a.lang = Language::from_code(&v)
+                    .ok_or_else(|| format!("langue inconnue : {v} (attendu fr ou en)"))?;
+            }
             "--niveau" | "--level" => {
                 let n: u8 = val(&mut it, &arg)?;
                 if !LEVELS.contains(&n) {
@@ -183,7 +195,7 @@ fn run() -> Result<(), String> {
     let (path, min_score) = match &args.dict {
         Some(p) => (p.into(), args.min_score.unwrap_or(0)),
         None => (
-            wordlist::french(|m| eprintln!("{m}")).map_err(|e| e.to_string())?,
+            wordlist::for_language(args.lang, |m| eprintln!("{m}")).map_err(|e| e.to_string())?,
             args.min_score.unwrap_or(if args.fleches {
                 settings.min_score
             } else {
@@ -236,7 +248,11 @@ fn run() -> Result<(), String> {
     if args.fleches {
         // Les définitions de --defs priment ; le cache complète et reçoit
         // celles que rédige --auto-defs.
-        let cache_path = wordlist::cache_dir().map(|d| d.join("definitions.txt"));
+        let cache_name = match args.lang {
+            Language::Fr => "definitions.txt",
+            Language::En => "definitions-en.txt",
+        };
+        let cache_path = wordlist::cache_dir().map(|d| d.join(cache_name));
         let mut all = match &args.defs {
             Some(p) => load_definitions(Path::new(p))?,
             None => Definitions::default(),
@@ -278,8 +294,9 @@ fn run() -> Result<(), String> {
             let missing = fl.missing_definitions(Some(&defs));
             if !missing.is_empty() {
                 let path = cache_path.ok_or("aucun dossier de cache : définir CROSSWORDS_CACHE")?;
-                let r = autodefs::generate(&missing, &defs, level, |m| eprintln!("{m}"))
-                    .map_err(|e| e.to_string())?;
+                let r =
+                    autodefs::generate_for(args.lang, &missing, &defs, level, |m| eprintln!("{m}"))
+                        .map_err(|e| e.to_string())?;
                 append_definitions(&path, &r.definitions, level, &r.model)?;
                 for (w, def) in &r.definitions {
                     defs.insert_level(w, def, level);
@@ -396,16 +413,16 @@ fn json_on_stdout(args: &Args) -> bool {
 
 fn report_crossword(solution: &Solution, args: &Args, seed: u64) -> Result<(), String> {
     if !json_on_stdout(args) {
-        println!("{solution}");
-        print!("{}", solution.word_list());
+        println!("{}", solution.grid_text_in(args.lang));
+        print!("{}", solution.word_list_in(args.lang));
     }
     stats_line(solution, "cases noires");
-    write_json(args, || solution.to_json(Some(seed)))?;
+    write_json(args, || solution.to_json_in(Some(seed), args.lang))?;
     if let Some(p) = &args.svg {
-        write_file(p, blank(&solution.grid).to_svg(false))?;
+        write_file(p, blank(&solution.grid).to_svg_in(false, args.lang))?;
     }
     if let Some(p) = &args.svg_solution {
-        write_file(p, solution.grid.to_svg(true))?;
+        write_file(p, solution.grid.to_svg_in(true, args.lang))?;
     }
     Ok(())
 }
@@ -419,8 +436,9 @@ fn report_fleches(
 ) -> Result<(), String> {
     let text = !json_on_stdout(args);
     if text {
-        println!("{}", fl.solution);
-        if args.numbered {
+        println!("{}", fl.solution.grid_text_in(args.lang));
+        // Les coordonnées en chiffres romains n'ont de sens qu'en français.
+        if args.numbered || args.lang == Language::En {
             println!("Définitions (numéro, flèche, mot)");
             print!("{}", fl.numbered_clue_list(defs));
         } else {
@@ -440,10 +458,12 @@ fn report_fleches(
             missing.iter().for_each(|w| eprintln!("{w}"));
         }
     }
-    write_json(args, || fl.to_json(defs, Some(seed), Some(level)))?;
+    write_json(args, || {
+        fl.to_json_in(defs, Some(seed), Some(level), args.lang)
+    })?;
     let svg = |f: &Fleches, letters: bool| {
         if args.numbered {
-            f.to_svg_numbered(letters, defs)
+            f.to_svg_numbered_in(letters, defs, args.lang)
         } else {
             f.to_svg(letters, defs)
         }

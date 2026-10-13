@@ -13,11 +13,11 @@
 //! première rangée et la première colonne, puis des cases définitions sont
 //! semées à l'intérieur pour couper les mots.
 
-use crate::Error;
 use crate::dict::{Dictionary, Letter, letter_char, normalize};
 use crate::grid::{Cell, Grid, Solution, roman};
 use crate::rng::Rng;
 use crate::solver::{Outcome, Solver};
+use crate::{Error, Language};
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::io::{self, BufRead};
@@ -330,16 +330,39 @@ impl Fleches {
     /// Rendu SVG, définitions dans les cases. Sans définition connue, la case
     /// affiche la longueur du mot.
     pub fn to_svg(&self, with_letters: bool, defs: Option<&Definitions>) -> String {
-        self.render(with_letters, defs, false)
+        self.render(with_letters, defs, None)
     }
 
     /// Rendu SVG à numéros : les cases définitions portent un numéro et une
     /// flèche, les définitions numérotées sont listées sous la grille.
     pub fn to_svg_numbered(&self, with_letters: bool, defs: Option<&Definitions>) -> String {
-        self.render(with_letters, defs, true)
+        self.render(with_letters, defs, Some(Language::Fr))
     }
 
-    fn render(&self, with_letters: bool, defs: Option<&Definitions>, numbered: bool) -> String {
+    /// Comme [`Fleches::to_svg_numbered`], avec le titre de la liste dans la
+    /// langue voulue (« Définitions » ou « Clues »).
+    pub fn to_svg_numbered_in(
+        &self,
+        with_letters: bool,
+        defs: Option<&Definitions>,
+        lang: Language,
+    ) -> String {
+        self.render(with_letters, defs, Some(lang))
+    }
+
+    /// `numbered` : `None` pour les définitions dans les cases, sinon la
+    /// langue de la liste numérotée sous la grille.
+    fn render(
+        &self,
+        with_letters: bool,
+        defs: Option<&Definitions>,
+        numbered: Option<Language>,
+    ) -> String {
+        let title = match numbered {
+            Some(Language::En) => "Clues",
+            _ => "Définitions",
+        };
+        let numbered = numbered.is_some();
         const C: usize = 64;
         const P: usize = 4;
         let g = &self.solution.grid;
@@ -453,7 +476,7 @@ impl Fleches {
             let y0 = P + grid_h;
             let _ = write!(
                 s,
-                r#"<text x="{P}" y="{}" font-size="15" font-weight="bold">Définitions</text>"#,
+                r#"<text x="{P}" y="{}" font-size="15" font-weight="bold">{title}</text>"#,
                 y0 + LIST_TITLE - 8
             );
             for e in &list.entries {
@@ -952,6 +975,10 @@ mod tests {
         assert!(svg.contains("Une &amp; définition"));
         assert!(svg.contains(&format!(">{}<", nums.len())));
         assert!(!fl.to_svg(false, Some(&defs)).contains(">Définitions<"));
+        assert!(
+            fl.to_svg_numbered_in(false, Some(&defs), Language::En)
+                .contains(">Clues<")
+        );
         let list = fl.numbered_clue_list(Some(&defs));
         assert_eq!(list.lines().count(), nums.len());
     }

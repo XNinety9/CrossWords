@@ -9,6 +9,7 @@
 //! des mots pour tenir dans une case, mot-réponse absent) et les refusées
 //! sont redemandées une fois.
 
+use crate::Language;
 use crate::dict::normalize;
 use crate::fleches::Definitions;
 use crate::json::{self, Json};
@@ -61,8 +62,8 @@ pub struct Report {
     pub model: String,
 }
 
-/// Rédige une définition de niveau `level` (1 à 4) pour chaque mot de
-/// `words`, dans le style de celles de ce niveau déjà présentes dans
+/// Rédige une définition française de niveau `level` (1 à 4) pour chaque
+/// mot de `words`, dans le style de celles de ce niveau déjà présentes dans
 /// `examples`.
 pub fn generate(
     words: &[String],
@@ -70,7 +71,18 @@ pub fn generate(
     level: u8,
     log: impl FnMut(&str),
 ) -> io::Result<Report> {
-    generate_with(model_for_level(level), words, examples, level, log)
+    generate_for(Language::Fr, words, examples, level, log)
+}
+
+/// Comme [`generate`], dans la langue `lang`.
+pub fn generate_for(
+    lang: Language,
+    words: &[String],
+    examples: &Definitions,
+    level: u8,
+    log: impl FnMut(&str),
+) -> io::Result<Report> {
+    run(model_for_level(level), lang, words, examples, level, log)
 }
 
 /// Modèle employé pour un niveau.
@@ -81,6 +93,17 @@ pub fn model_for_level(level: u8) -> &'static str {
 /// Comme [`generate`], avec un modèle choisi.
 pub fn generate_with(
     model: &str,
+    words: &[String],
+    examples: &Definitions,
+    level: u8,
+    log: impl FnMut(&str),
+) -> io::Result<Report> {
+    run(model, Language::Fr, words, examples, level, log)
+}
+
+fn run(
+    model: &str,
+    lang: Language,
     words: &[String],
     examples: &Definitions,
     level: u8,
@@ -95,7 +118,7 @@ pub fn generate_with(
                 "ANTHROPIC_API_KEY n'est pas définie",
             )
         })?;
-    let system = system_prompt(&examples.at_level(level), level);
+    let system = system_prompt(&examples.at_level(level), level, lang);
     let mut report = Report {
         model: model.to_string(),
         ..Report::default()
@@ -117,7 +140,7 @@ pub fn generate_with(
                 chunk.len()
             ));
             let effort = if level >= 3 { "medium" } else { "low" };
-            let (got, tin, tout) = call(&key, model, effort, &system, chunk, &feedback)?;
+            let (got, tin, tout) = call(&key, model, effort, &system, lang, chunk, &feedback)?;
             report.input_tokens += tin;
             report.output_tokens += tout;
             for w in chunk {
@@ -187,15 +210,62 @@ fn level_style(level: u8) -> &'static str {
     }
 }
 
-fn system_prompt(examples: &Definitions, level: u8) -> String {
+/// Style attendu à chaque niveau pour l'anglais, avec des exemples.
+fn level_style_en(level: u8) -> &'static str {
+    match level.clamp(1, 4) {
+        1 => {
+            "Level 1 of 4, easy: a direct synonym or obvious definition; the answer should come at once. Examples: SUMMER: \"Warm season\"; SERVE: \"Wait on\"; PEAK: \"Summit\"."
+        }
+        2 => {
+            "Level 2 of 4, medium: accurate but less immediate, through a less common synonym, a precision, a secondary meaning or a light allusion. Examples: COVE: \"Small bay\"; PEAK: \"Highest point\"; ROAMED: \"Wandered aimlessly\"; ERE: \"Before, poetically\"."
+        }
+        3 => {
+            "Level 3 of 4, hard: indirect paraphrase, figurative or secondary meaning, cultural reference. The answer takes some thought, but the clue stays accurate. Examples: SUMMER: \"It ends in September\"; TSAR: \"Ivan, for one\"; ROAMED: \"Did as Odysseus did\"; GOLDEN: \"Like silence, proverbially\"."
+        }
+        _ => {
+            "Level 4 of 4, very hard: double meaning, wordplay, misdirection. The clue seems to point elsewhere and only makes sense once the answer is found; a final question mark signals the wordplay, as in American crosswords. It must still be accurate for the answer. Examples: IVY: \"Wall climber\"; TEE: \"Driver's support?\"; ENVY: \"Green-eyed monster\"; BANK: \"Place with many branches?\"."
+        }
+    }
+}
+
+const SYSTEM_EN: &str = "You write clues for arrowword and crossword puzzles in English.
+
+Each answer is given in capital letters, with no spaces or punctuation. For each one, start by identifying it in the \"analyse\" field: its usual spelling, part of speech and form (tense, person, number), and the reading that is most natural in a puzzle when several exist (LEAD is a metal or to guide; TEARS are drops or rips).
+
+Then write the clue, in the style of crossword puzzles and at the difficulty level given below:
+- short: 1 to 5 words, at most 30 characters, no word longer than 11 letters (it must fit in a small grid cell);
+- exactly the same form as the answer: a plural answer takes a plural clue, a past tense answer a past tense clue (RAN: \"Sprinted\"), an adverb an adverb;
+- never containing the answer itself, a word from the same family, or a variant spelling of it;
+- in natural English with American spelling (like the word list), not telegraphic;
+- never in a vulgar or sexual sense: pick another meaning, or else a neutral hint;
+- for an abbreviation, a foreign word, a proper name or a function word, a brief pointer (\"Definite article\" for THE, \"Prefix with sphere\" for ATMO);
+- with a capital first letter and no final period.
+
+Answer for every word received, copying it exactly as given into the \"mot\" field.";
+
+fn system_prompt(examples: &Definitions, level: u8, lang: Language) -> String {
     let entries = examples.entries();
-    let mut s = String::from(SYSTEM);
+    let (base, style, more) = match lang {
+        Language::Fr => (
+            SYSTEM,
+            level_style(level),
+            "Autres définitions de ce niveau, pour le ton :",
+        ),
+        Language::En => (
+            SYSTEM_EN,
+            level_style_en(level),
+            "Other clues at this level, for tone:",
+        ),
+    };
+    let mut s = String::from(base);
     s.push_str("\n\n");
-    s.push_str(level_style(level));
+    s.push_str(style);
     if entries.is_empty() {
         return s;
     }
-    s.push_str("\n\nAutres définitions de ce niveau, pour le ton :\n");
+    s.push_str("\n\n");
+    s.push_str(more);
+    s.push('\n');
     let step = entries.len().div_ceil(EXAMPLES).max(1);
     for (w, d) in entries.iter().step_by(step) {
         let _ = writeln!(s, "{w} : {d}");
@@ -211,14 +281,25 @@ fn call(
     model: &str,
     effort: &str,
     system: &str,
+    lang: Language,
     words: &[String],
     feedback: &[String],
 ) -> io::Result<(Pairs, u64, u64)> {
-    let mut user = format!("Mots à définir :\n{}", words.join("\n"));
+    let (head, retry) = match lang {
+        Language::Fr => (
+            "Mots à définir :",
+            "Ces définitions ont été refusées au premier essai ; propose autre chose :",
+        ),
+        Language::En => (
+            "Answers to clue:",
+            "These clues were rejected on the first attempt (reasons in French); suggest something else:",
+        ),
+    };
+    let mut user = format!("{head}\n{}", words.join("\n"));
     if !feedback.is_empty() {
-        user.push_str(
-            "\n\nCes définitions ont été refusées au premier essai ; propose autre chose :\n",
-        );
+        user.push_str("\n\n");
+        user.push_str(retry);
+        user.push('\n');
         user.push_str(&feedback.join("\n"));
     }
     // Repli côté serveur en cas de refus des filtres de sécurité, conseillé
@@ -347,6 +428,18 @@ mod tests {
         assert!(check("ET", "Petite conjonction").is_ok());
         assert!(check("ET", "Et voilà").is_err());
         assert!(check("ETE", "Été indien").is_err());
+    }
+
+    #[test]
+    fn prompts_follow_language() {
+        let mut ex = Definitions::default();
+        ex.insert_level("COVE", "Small bay", 2);
+        let en = system_prompt(&ex.at_level(2), 2, Language::En);
+        assert!(en.starts_with("You write clues"));
+        assert!(en.contains("Level 2 of 4") && en.contains("COVE : Small bay"));
+        let fr = system_prompt(&Definitions::default(), 4, Language::Fr);
+        assert!(fr.starts_with("Tu rédiges") && fr.contains("Niveau 4 sur 4"));
+        assert!(!fr.contains("Autres définitions"));
     }
 
     #[test]

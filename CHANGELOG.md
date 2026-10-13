@@ -2,6 +2,19 @@
 
 Les versions suivent le [versionnage sémantique](https://semver.org/lang/fr/). La section de chaque version sert de notes de publication sur GitHub.
 
+## [1.1.0] - 2026-10-13
+
+### Ajouts
+
+- Grilles en anglais (`--langue en`), mots croisés comme mots fléchés : dictionnaire an-array-of-english-words noté par la liste collaborative de Crossword Nexus, mêmes seuils et mêmes niveaux qu'en français.
+- Présentation anglo-saxonne des mots croisés en anglais : cases numérotées et listes « Across » et « Down », en texte comme en SVG.
+- Définitions automatiques en anglais, en orthographe américaine, avec un cache séparé (`definitions-en.txt`).
+- Bibliothèque : type `Language`, `wordlist::english`, `autodefs::generate_for` et variantes `_in` des rendus et de l'export JSON ; l'API 1.0 est inchangée.
+
+### Changements
+
+- Format JSON en version 2 : champ `langue`, et `numero` des mots (numérotation anglo-saxonne des cases, pour les mots croisés).
+
 ## [1.0.0] - 2026-10-13
 
 Première version publiée.
@@ -29,4 +42,5 @@ Première version publiée.
 
 - Remplissage par propagation de contraintes, mot le moins contraignant d'abord, budget court par gabarit et nouveaux tirages ; résultat déterminé par la graine.
 
+[1.1.0]: https://github.com/XNinety9/CrossWords/releases/tag/v1.1.0
 [1.0.0]: https://github.com/XNinety9/CrossWords/releases/tag/v1.0.0
